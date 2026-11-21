@@ -1,4 +1,5 @@
 import asyncio
+import time
 from collections.abc import AsyncIterator
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, TopicPartition
@@ -69,7 +70,11 @@ class LogBroker:
         if self._producer is None:
             raise RuntimeError("LogBroker has not been started")
         target_topic = topic or self.default_topic
-        await self._producer.send_and_wait(target_topic, value=payload)
+        await self._producer.send_and_wait(
+            target_topic,
+            value=payload,
+            timestamp_ms=int(time.time() * 1000),
+        )
 
     async def read_logs(
         self,
@@ -156,8 +161,18 @@ class LogBroker:
             else:
                 await consumer.seek_to_end(*tps)
 
-            async for msg in consumer:
-                if msg.value is not None:
-                    yield msg.value.decode("utf-8", errors="replace") + "\n"
+            # Flush HTTP response headers immediately so proxies/browsers don't stall
+            yield "\n"
+
+            while True:
+                batch = await consumer.getmany(timeout_ms=5000, max_records=50)
+                if not batch:
+                    # Periodic heartbeat lets Starlette detect disconnected clients
+                    yield "\n"
+                    continue
+                for _tp, messages in batch.items():
+                    for msg in messages:
+                        if msg.value is not None:
+                            yield msg.value.decode("utf-8", errors="replace") + "\n"
         finally:
             await _safe_stop_consumer(consumer)

@@ -762,3 +762,4 @@ class AlertStore:
                 "SELECT * FROM notification_outbox WHERE id = ?", (outbox_id,)
             ).fetchone()
             return self._row_to_outbox(updated) if updated else None
+

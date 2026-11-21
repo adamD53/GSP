@@ -246,18 +246,35 @@ export function LogDashboard() {
     return () => window.clearInterval(timer);
   }, [checkHealth, fetchSnapshot]);
 
-  // Live NDJSON stream for /api/logs/parsed/stream
+  // Live NDJSON stream for /api/logs/parsed/stream (pauses in background tabs to avoid HTTP/1.1 6-conn deadlock)
   useEffect(() => {
     if (!isStreaming) {
       setStreamConnected(false);
       return;
     }
 
-    const controller = new AbortController();
     let cancelled = false;
+    let activeController: AbortController | null = null;
     let reconnectTimer: number | undefined;
 
+    function abortActive() {
+      if (reconnectTimer) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = undefined;
+      }
+      if (activeController) {
+        activeController.abort();
+        activeController = null;
+      }
+      setStreamConnected(false);
+    }
+
     async function connectStream() {
+      if (cancelled || document.hidden) return;
+      abortActive();
+      const controller = new AbortController();
+      activeController = controller;
+
       try {
         const res = await fetch(
           "/api/logs/parsed/stream?from_beginning=false",
@@ -268,10 +285,6 @@ export function LogDashboard() {
         );
 
         if (!res.ok || !res.body) {
-          setStreamConnected(false);
-          if (!cancelled) {
-            reconnectTimer = window.setTimeout(connectStream, 5000);
-          }
           return;
         }
 
@@ -280,7 +293,7 @@ export function LogDashboard() {
         const decoder = new TextDecoder();
         let buffer = "";
 
-        while (!cancelled) {
+        while (!cancelled && !controller.signal.aborted) {
           const { done, value } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
@@ -312,19 +325,43 @@ export function LogDashboard() {
       } catch (err) {
         if (err instanceof Error && err.name === "AbortError") return;
       } finally {
-        setStreamConnected(false);
-        if (!cancelled) {
-          reconnectTimer = window.setTimeout(connectStream, 5000);
+        if (activeController === controller) {
+          activeController = null;
+          setStreamConnected(false);
+          if (!cancelled && !document.hidden) {
+            reconnectTimer = window.setTimeout(connectStream, 5000);
+          }
         }
       }
     }
 
-    void connectStream();
+    function handleVisibilityChange() {
+      if (document.hidden) {
+        abortActive();
+      } else if (!cancelled) {
+        void connectStream();
+      }
+    }
+
+    function handleUnload() {
+      cancelled = true;
+      abortActive();
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pagehide", handleUnload);
+    window.addEventListener("beforeunload", handleUnload);
+
+    if (!document.hidden) {
+      void connectStream();
+    }
 
     return () => {
       cancelled = true;
-      controller.abort();
-      if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pagehide", handleUnload);
+      window.removeEventListener("beforeunload", handleUnload);
+      abortActive();
     };
   }, [isStreaming, fetchAlerts]);
 

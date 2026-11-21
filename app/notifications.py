@@ -263,7 +263,11 @@ async def dispatch_notifications(
                 )
                 results.append(
                     decision.model_copy(
-                        update={"status": "sent", "reason": f"Sent via SMTP to {decision.target}"}
+                        update={
+                            "status": "sent",
+                            "reason": f"Sent via SMTP to {decision.target}",
+                            "delivered_at": datetime.now(timezone.utc).isoformat(),
+                        }
                     )
                 )
             except Exception as exc:
@@ -292,7 +296,11 @@ async def dispatch_notifications(
                     resp.raise_for_status()
                 results.append(
                     decision.model_copy(
-                        update={"status": "sent", "reason": f"Sent SMS via webhook to {decision.target}"}
+                        update={
+                            "status": "sent",
+                            "reason": f"Sent SMS via webhook to {decision.target}",
+                            "delivered_at": datetime.now(timezone.utc).isoformat(),
+                        }
                     )
                 )
             except Exception as exc:
@@ -311,7 +319,11 @@ async def dispatch_notifications(
             decision.target,
             decision.rule_id,
         )
-        results.append(decision)
+        results.append(
+            decision.model_copy(
+                update={"delivered_at": datetime.now(timezone.utc).isoformat()}
+            )
+        )
 
     return results
 

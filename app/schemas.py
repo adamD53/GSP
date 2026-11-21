@@ -11,6 +11,7 @@ AlertStatus = Literal["open", "acked", "resolved"]
 RunbookFormat = Literal["yaml", "markdown", "text"]
 ApprovalMode = Literal["none", "required"]
 ParseMode = Literal["fast_json", "fast_yaml", "schema_cache", "llm"]
+ProposalTargetType = Literal["runbook", "rule"]
 
 
 class RunbookStep(BaseModel):
@@ -108,6 +109,10 @@ class NotificationDecision(BaseModel):
         description="sent (live provider), routed (simulated), suppressed (off-hours), or failed."
     )
     reason: str = Field(description="Human-readable routing decision explanation.")
+    delivered_at: str | None = Field(
+        default=None,
+        description="UTC ISO-8601 timestamp when notification was dispatched or routed.",
+    )
 
 
 class OutboxRecord(BaseModel):
@@ -128,6 +133,19 @@ class OutboxRecord(BaseModel):
     last_error: str | None = None
     created_at: str
     updated_at: str
+
+
+class ProposedFix(BaseModel):
+    id: str
+    alert_id: str
+    target_type: ProposalTargetType
+    target_id: str
+    title: str
+    rationale: str
+    source: Literal["llm", "heuristic"] = "heuristic"
+    proposed_runbook: RunbookDefinition | None = None
+    proposed_rule_patch: dict[str, Any] | None = None
+    created_at: str
 
 
 class RuleMatch(BaseModel):
@@ -201,4 +219,16 @@ class ParsedLog(LLMExtractedLog):
     alert: bool = Field(
         default=False,
         description="True when one or more rulebook rules matched.",
+    )
+    ingested_at: str | None = Field(
+        default=None,
+        description="UTC ISO-8601 timestamp when the raw event entered Kafka/API.",
+    )
+    processed_at: str | None = Field(
+        default=None,
+        description="UTC ISO-8601 timestamp when parsing, rule evaluation, and dispatch finished.",
+    )
+    latency_ms: float | None = Field(
+        default=None,
+        description="End-to-end server latency from ingest to delivery in milliseconds.",
     )

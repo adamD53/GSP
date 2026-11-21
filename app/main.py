@@ -15,6 +15,7 @@ from app.notifications import (
     process_outbox_once,
 )
 from app.parser import prepare_rule_eval_target
+from app.proposals import generate_proposed_fix
 from app.rules import (
     evaluate_and_route,
     load_rules,
@@ -423,6 +424,32 @@ def create_app(
         if requeued is None:
             raise HTTPException(status_code=404, detail="Outbox record not found")
         return JSONResponse(requeued.model_dump())
+
+    @app.post("/alerts/{alert_id}/propose-fix", response_class=JSONResponse)
+    async def propose_fix_endpoint(
+        alert_id: str,
+        payload: dict[str, Any] = Body(default={}),
+    ) -> JSONResponse:
+        alert = active_alert_store.get_alert(alert_id)
+        if alert is None:
+            raise HTTPException(status_code=404, detail="Alert not found")
+
+        raw_target = str(payload.get("target_type") or "auto").strip().lower()
+        if raw_target not in ("auto", "runbook", "rule"):
+            raise HTTPException(
+                status_code=400,
+                detail="target_type must be one of: auto, runbook, rule",
+            )
+
+        rules = load_rules(active_rules_file, strict=False)
+        runbooks = load_runbooks(active_runbooks_file)
+        proposal = await generate_proposed_fix(
+            alert=alert,
+            rules=rules,
+            runbooks=runbooks,
+            target_type=raw_target,  # type: ignore[arg-type]
+        )
+        return JSONResponse(proposal.model_dump(), status_code=200)
 
     return app
 

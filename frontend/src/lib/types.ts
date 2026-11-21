@@ -96,6 +96,19 @@ export interface AlertRecord {
   step_executions?: StepExecutionRecord[];
 }
 
+export interface ProposedFix {
+  id: string;
+  alert_id: string;
+  target_type: "runbook" | "rule";
+  target_id: string;
+  title: string;
+  rationale: string;
+  source: "llm" | "heuristic";
+  proposed_runbook?: RunbookDefinition | null;
+  proposed_rule_patch?: Record<string, unknown> | null;
+  created_at: string;
+}
+
 export interface NotificationDecision {
   rule_id: string;
   rule_name: string;

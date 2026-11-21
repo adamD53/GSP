@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import signal
+from datetime import datetime, timezone
 from typing import Protocol
 
 from aiokafka import AIOKafkaConsumer
@@ -38,6 +39,7 @@ async def process_raw_message(
     dead_letter_topic: str,
     rules_file: str | None = None,
     alert_store: AlertStore | None = None,
+    ingested_at_ms: int | None = None,
 ) -> bool:
     """Parse one raw log string, evaluate rulebook + dedup alerts, and route."""
     try:
@@ -110,9 +112,24 @@ async def process_raw_message(
                 )
                 continue
 
+        processed_dt = datetime.now(timezone.utc)
+        ingested_iso: str | None = None
+        latency_ms: float | None = None
+        if ingested_at_ms is not None and ingested_at_ms > 0:
+            ingested_dt = datetime.fromtimestamp(ingested_at_ms / 1000.0, tz=timezone.utc)
+            ingested_iso = ingested_dt.isoformat()
+            latency_ms = round(
+                max(0.0, (processed_dt - ingested_dt).total_seconds() * 1000.0), 2
+            )
+
+        timing_update: dict[str, object] = {
+            "ingested_at": ingested_iso,
+            "processed_at": processed_dt.isoformat(),
+            "latency_ms": latency_ms,
+        }
         if matches:
-            parsed = parsed.model_copy(
-                update={
+            timing_update.update(
+                {
                     "matched_rules": matches,
                     "notifications": all_decisions,
                     "alert": True,
@@ -125,6 +142,7 @@ async def process_raw_message(
                 parsed.level,
                 ", ".join(f"{d.channel}:{d.status}" for d in all_decisions) or "none",
             )
+        parsed = parsed.model_copy(update=timing_update)
 
         await broker.send_raw(
             parsed.model_dump_json().encode("utf-8"),
@@ -147,13 +165,19 @@ async def process_batch(
     concurrency: int = 16,
     rules_file: str | None = None,
     alert_store: AlertStore | None = None,
+    ingested_at_ms_list: list[int | None] | None = None,
 ) -> list[bool]:
     """Process a batch of raw log strings concurrently with bounded parallelism."""
     if not raw_messages:
         return []
     sem = asyncio.Semaphore(max(1, concurrency))
+    timestamps = (
+        ingested_at_ms_list
+        if ingested_at_ms_list is not None and len(ingested_at_ms_list) == len(raw_messages)
+        else [None] * len(raw_messages)
+    )
 
-    async def _run_one(raw_text: str) -> bool:
+    async def _run_one(raw_text: str, ingested_ms: int | None) -> bool:
         async with sem:
             return await process_raw_message(
                 raw_text=raw_text,
@@ -163,9 +187,14 @@ async def process_batch(
                 dead_letter_topic=dead_letter_topic,
                 rules_file=rules_file,
                 alert_store=alert_store,
+                ingested_at_ms=ingested_ms,
             )
 
-    return list(await asyncio.gather(*(_run_one(raw) for raw in raw_messages)))
+    return list(
+        await asyncio.gather(
+            *(_run_one(raw, ts) for raw, ts in zip(raw_messages, timestamps))
+        )
+    )
 
 
 async def run_worker() -> None:
@@ -245,12 +274,15 @@ async def run_worker() -> None:
                 timeout_ms=500,
                 max_records=settings.worker_batch_size,
             )
-            raw_messages = [
-                msg.value.decode("utf-8", errors="replace")
-                for messages in batch.values()
-                for msg in messages
-                if msg.value is not None
-            ]
+            raw_messages: list[str] = []
+            ingested_timestamps: list[int | None] = []
+            for messages in batch.values():
+                for msg in messages:
+                    if msg.value is not None:
+                        raw_messages.append(msg.value.decode("utf-8", errors="replace"))
+                        ingested_timestamps.append(
+                            msg.timestamp if isinstance(msg.timestamp, int) else None
+                        )
             if not raw_messages:
                 continue
 
@@ -262,6 +294,7 @@ async def run_worker() -> None:
                 dead_letter_topic=settings.dead_letter_topic,
                 concurrency=settings.worker_concurrency,
                 alert_store=alert_store,
+                ingested_at_ms_list=ingested_timestamps,
             )
             await consumer.commit()
     finally:

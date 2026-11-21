@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://ollama:11434"
     ollama_model: str = "qwen2.5:1.5b"
     ollama_timeout_seconds: float = 60.0
+    proposal_llm_timeout_seconds: float = 3.5
     worker_batch_size: int = 100
     worker_concurrency: int = 16
     enable_fast_parser: bool = True

@@ -8,15 +8,30 @@ import {
   CheckCircle2,
   Clock,
   History,
+  Loader2,
   Mail,
   MessageSquare,
   RotateCcw,
+  Sparkles,
   User,
+  X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import type { AlertRecord, AlertStatus, RuleSeverity } from "@/lib/types";
+import type {
+  AlertRecord,
+  AlertStatus,
+  ProposedFix,
+  RuleSeverity,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const SEVERITY_STYLE: Record<RuleSeverity, string> = {
@@ -65,7 +80,20 @@ export function AlertsPanel({
   const [actor, setActor] = useState("oncall");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [openRunbookId, setOpenRunbookId] = useState<string | null>(null);
+  const [modalRunbookAlertId, setModalRunbookAlertId] = useState<string | null>(
+    null
+  );
+  const modalAlert = useMemo(
+    () => alerts.find((a) => a.id === modalRunbookAlertId) ?? null,
+    [alerts, modalRunbookAlertId]
+  );
+  const [proposingId, setProposingId] = useState<string | null>(null);
+  const [proposalsByAlert, setProposalsByAlert] = useState<
+    Record<string, ProposedFix>
+  >({});
+  const [proposalErrorByAlert, setProposalErrorByAlert] = useState<
+    Record<string, string>
+  >({});
 
   const filtered = useMemo(() => {
     return alerts.filter((a) => {
@@ -102,6 +130,55 @@ export function AlertsPanel({
     } finally {
       setBusyId(null);
     }
+  }
+
+  async function handleProposeFix(
+    alertId: string,
+    targetType: "auto" | "runbook" | "rule" = "auto"
+  ) {
+    setProposingId(alertId);
+    setProposalErrorByAlert((prev) => {
+      const next = { ...prev };
+      delete next[alertId];
+      return next;
+    });
+    try {
+      const res = await fetch(
+        `/api/alerts/${encodeURIComponent(alertId)}/propose-fix`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ target_type: targetType }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setProposalErrorByAlert((prev) => ({
+          ...prev,
+          [alertId]: data.detail || data.error || `HTTP ${res.status}`,
+        }));
+        return;
+      }
+      setProposalsByAlert((prev) => ({
+        ...prev,
+        [alertId]: data as ProposedFix,
+      }));
+    } catch (err) {
+      setProposalErrorByAlert((prev) => ({
+        ...prev,
+        [alertId]: err instanceof Error ? err.message : "Failed to propose fix",
+      }));
+    } finally {
+      setProposingId(null);
+    }
+  }
+
+  function handleCloseProposal(alertId: string) {
+    setProposalsByAlert((prev) => {
+      const next = { ...prev };
+      delete next[alertId];
+      return next;
+    });
   }
 
   return (
@@ -269,17 +346,25 @@ export function AlertsPanel({
                     </div>
 
                     <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={proposingId === alert.id}
+                        onClick={() => void handleProposeFix(alert.id, "auto")}
+                        className="gap-1 border-violet-500/40 text-violet-700 hover:bg-violet-500/10 dark:text-violet-300"
+                      >
+                        {proposingId === alert.id ? (
+                          <Loader2 className="size-3 animate-spin" />
+                        ) : (
+                          <Sparkles className="size-3" />
+                        )}
+                        Propose Fix
+                      </Button>
                       {alert.runbook && (
                         <Button
                           size="xs"
-                          variant={
-                            openRunbookId === alert.id ? "secondary" : "outline"
-                          }
-                          onClick={() =>
-                            setOpenRunbookId(
-                              openRunbookId === alert.id ? null : alert.id
-                            )
-                          }
+                          variant="outline"
+                          onClick={() => setModalRunbookAlertId(alert.id)}
                           className="gap-1"
                         >
                           <BookOpen className="size-3" />
@@ -333,71 +418,60 @@ export function AlertsPanel({
                     </div>
                   </div>
 
-                  {alert.runbook &&
-                    (openRunbookId === alert.id ||
-                      (openRunbookId === null && alert.status !== "resolved")) && (
-                      <div className="mt-3 rounded-lg border bg-muted/30 p-3 space-y-2">
+                  {proposalErrorByAlert[alert.id] && (
+                    <div className="mt-2.5 rounded-md border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-xs text-rose-700 dark:text-rose-300">
+                      Proposal error: {proposalErrorByAlert[alert.id]}
+                    </div>
+                  )}
+
+                  {proposalsByAlert[alert.id] && (() => {
+                    const prop = proposalsByAlert[alert.id];
+                    return (
+                      <div className="mt-3 rounded-lg border border-violet-500/35 bg-violet-500/5 p-3 space-y-2">
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div className="flex items-center gap-1.5">
-                            <BookOpen className="size-3.5 text-sky-500" />
-                            <span className="text-xs font-semibold">
-                              {alert.runbook.name}
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <Sparkles className="size-3.5 text-violet-500" />
+                            <span className="text-xs font-semibold text-foreground">
+                              {prop.title}
                             </span>
                             <Badge
                               variant="outline"
                               className="font-mono text-[10px] uppercase"
                             >
-                              {alert.runbook.format}
+                              {prop.target_type}
+                            </Badge>
+                            <Badge
+                              variant="secondary"
+                              className="font-mono text-[10px] uppercase"
+                            >
+                              {prop.source}
                             </Badge>
                           </div>
-                          <span className="text-[11px] text-muted-foreground">
-                            Interpolated with live alert fields
-                          </span>
+                          <Button
+                            size="icon-xs"
+                            variant="ghost"
+                            onClick={() => handleCloseProposal(alert.id)}
+                            aria-label="Close proposal"
+                          >
+                            <X className="size-3" />
+                          </Button>
                         </div>
-
-                        <div className="space-y-1.5">
-                          {alert.runbook.steps.map((step) => {
-                            const needsApproval = step.approval === "required";
-                            return (
-                              <div
-                                key={step.index}
-                                className="rounded-md border bg-card px-2.5 py-2 text-xs"
-                              >
-                                <div className="flex flex-wrap items-center gap-1.5">
-                                  <span className="font-mono text-[11px] text-muted-foreground">
-                                    #{step.index + 1}
-                                  </span>
-                                  <span className="font-medium text-foreground">
-                                    {step.label}
-                                  </span>
-                                  {step.action && (
-                                    <Badge
-                                      variant="secondary"
-                                      className="font-mono text-[10px]"
-                                    >
-                                      {step.action}
-                                    </Badge>
-                                  )}
-                                  {needsApproval && (
-                                    <Badge
-                                      variant="outline"
-                                      className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 font-mono text-[10px]"
-                                    >
-                                      Approval Required
-                                    </Badge>
-                                  )}
-                                </div>
-                                {step.condition_note && (
-                                  <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
-                                    if: {step.condition_note}
-                                  </p>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {prop.rationale}
+                        </p>
+                        {prop.proposed_runbook && (
+                          <pre className="max-h-48 overflow-auto rounded-md border bg-card p-2 font-mono text-[11px] leading-relaxed text-foreground">
+                            {prop.proposed_runbook.content}
+                          </pre>
+                        )}
+                        {prop.proposed_rule_patch && (
+                          <pre className="max-h-40 overflow-auto rounded-md border bg-card p-2 font-mono text-[11px] leading-relaxed text-foreground">
+                            {JSON.stringify(prop.proposed_rule_patch, null, 2)}
+                          </pre>
+                        )}
                       </div>
-                    )}
+                    );
+                  })()}
 
                   {isExpanded && alert.history.length > 0 && (
                     <div className="mt-2.5 border-t pt-2 space-y-1">
@@ -428,6 +502,101 @@ export function AlertsPanel({
           </div>
         )}
       </div>
+
+      <Dialog
+        open={Boolean(modalAlert?.runbook)}
+        onOpenChange={(open) => {
+          if (!open) setModalRunbookAlertId(null);
+        }}
+      >
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+          {modalAlert?.runbook && (
+            <>
+              <DialogHeader>
+                <div className="flex flex-wrap items-center gap-2">
+                  <BookOpen className="size-4 text-sky-500" />
+                  <DialogTitle>{modalAlert.runbook.name}</DialogTitle>
+                  <Badge
+                    variant="outline"
+                    className="font-mono text-[10px] uppercase"
+                  >
+                    {modalAlert.runbook.format}
+                  </Badge>
+                </div>
+                <DialogDescription>
+                  {modalAlert.rule_name}
+                  {modalAlert.service ? ` • ${modalAlert.service}` : ""} —
+                  interpolated with live alert fields
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-3 pt-1">
+                {modalAlert.runbook.description && (
+                  <p className="text-xs text-muted-foreground">
+                    {modalAlert.runbook.description}
+                  </p>
+                )}
+
+                <div className="space-y-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Steps
+                  </p>
+                  {modalAlert.runbook.steps.map((step) => {
+                    const needsApproval = step.approval === "required";
+                    return (
+                      <div
+                        key={step.index}
+                        className="rounded-md border bg-card px-3 py-2 text-xs"
+                      >
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="font-mono text-[11px] text-muted-foreground">
+                            #{step.index + 1}
+                          </span>
+                          <span className="font-medium text-foreground">
+                            {step.label}
+                          </span>
+                          {step.action && (
+                            <Badge
+                              variant="secondary"
+                              className="font-mono text-[10px]"
+                            >
+                              {step.action}
+                            </Badge>
+                          )}
+                          {needsApproval && (
+                            <Badge
+                              variant="outline"
+                              className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 font-mono text-[10px]"
+                            >
+                              Approval Required
+                            </Badge>
+                          )}
+                        </div>
+                        {step.condition_note && (
+                          <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                            if: {step.condition_note}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {modalAlert.runbook.rendered_content && (
+                  <div className="space-y-1.5">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      Rendered Runbook
+                    </p>
+                    <pre className="max-h-56 overflow-auto rounded-md border bg-muted/40 p-2.5 font-mono text-[11px] leading-relaxed text-foreground whitespace-pre-wrap">
+                      {modalAlert.runbook.rendered_content}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
