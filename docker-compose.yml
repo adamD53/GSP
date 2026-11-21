@@ -83,5 +83,15 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-60}
 
+  ui:
+    build: ./frontend
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_BASE_URL: http://api:8000
+    ports:
+      - "${UI_PORT:-3000}:3000"
+
 volumes:
   ollama_data:

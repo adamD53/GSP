@@ -18,10 +18,19 @@ API_PORT=8088 KAFKA_EXTERNAL_PORT=29092 docker compose up -d --build
 > On first startup, `ollama-init` pulls `qwen2.5:1.5b` (~1 GB) into the persistent `ollama_data` volume.
 
 Services started:
+- **Next.js Log Observatory UI**: `http://localhost:3000`
 - **FastAPI Receiver**: `http://localhost:8000`
 - **Redpanda Broker (Kafka API)**: `localhost:19092` (host) / `redpanda:9092` (Docker network)
 - **Ollama**: internal `http://ollama:11434` (with `ollama-init` model puller)
 - **Async Worker (`app.worker`)**: consumes `raw-logs` → parses via Ollama → publishes to `parsed-logs` (or `dead-letter-logs` on error)
+
+### Running the Frontend Locally
+
+```bash
+cd frontend
+npm install
+API_BASE_URL=http://localhost:8000 npm run dev
+```
 
 ## Endpoints
 
