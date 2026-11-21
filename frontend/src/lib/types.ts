@@ -9,6 +9,29 @@ export const LOG_LEVELS: LogLevel[] = [
   "UNKNOWN",
 ];
 
+export type RuleSeverity = "critical" | "high" | "medium" | "low";
+
+export interface RuleMatch {
+  id: string;
+  name: string;
+  severity: RuleSeverity;
+}
+
+export interface RulebookRule {
+  id?: string;
+  name?: string;
+  description?: string;
+  severity?: RuleSeverity;
+  enabled?: boolean;
+  field?: string;
+  operator?: string;
+  value?: unknown;
+  all?: Record<string, unknown>[];
+  any?: Record<string, unknown>[];
+  not?: Record<string, unknown>;
+  condition?: Record<string, unknown>;
+}
+
 export interface ParsedLog {
   timestamp: string | null;
   level: LogLevel;
@@ -17,6 +40,8 @@ export interface ParsedLog {
   summary: string;
   metadata: Record<string, unknown>;
   raw: string;
+  matched_rules?: RuleMatch[];
+  alert?: boolean;
 }
 
 export interface ParsedLogEntry extends ParsedLog {

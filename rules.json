@@ -1,0 +1,69 @@
+[
+  {
+    "id": "fatal-or-critical",
+    "name": "Fatal Severity Log",
+    "description": "Triggers on any FATAL log event across all services.",
+    "severity": "critical",
+    "enabled": true,
+    "field": "/level",
+    "operator": "eq",
+    "value": "FATAL"
+  },
+  {
+    "id": "high-latency-error",
+    "name": "High-Latency Error",
+    "description": "Triggers when an ERROR or FATAL log reports latency_ms above 3000ms.",
+    "severity": "high",
+    "enabled": true,
+    "all": [
+      {
+        "field": "/level",
+        "operator": "in",
+        "value": ["ERROR", "FATAL"]
+      },
+      {
+        "field": "/metadata/latency_ms",
+        "operator": "gt",
+        "value": 3000
+      }
+    ]
+  },
+  {
+    "id": "auth-or-db-failure",
+    "name": "Auth or Database Failure",
+    "description": "Triggers on failed authentication or database timeout messages.",
+    "severity": "high",
+    "enabled": true,
+    "any": [
+      {
+        "field": "/message",
+        "operator": "contains",
+        "value": "Failed password"
+      },
+      {
+        "field": "/message",
+        "operator": "contains",
+        "value": "timed out"
+      }
+    ]
+  },
+  {
+    "id": "low-stock-warning",
+    "name": "Low Inventory Threshold",
+    "description": "Triggers when inventory-sync reports remaining stock <= 5.",
+    "severity": "medium",
+    "enabled": true,
+    "all": [
+      {
+        "field": "/service",
+        "operator": "eq",
+        "value": "inventory-sync"
+      },
+      {
+        "field": "/metadata/remaining",
+        "operator": "lte",
+        "value": 5
+      }
+    ]
+  }
+]

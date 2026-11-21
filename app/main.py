@@ -2,11 +2,12 @@ import json
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, Query, Request
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from app.config import settings
 from app.kafka_client import LogBroker
+from app.rules import evaluate_message, load_rules, save_rules, validate_rules
 
 
 def _parse_json_lines(raw_text: str) -> list[dict[str, Any]]:
@@ -23,7 +24,11 @@ def _parse_json_lines(raw_text: str) -> list[dict[str, Any]]:
     return items
 
 
-def create_app(broker: LogBroker | None = None) -> FastAPI:
+def create_app(
+    broker: LogBroker | None = None,
+    rules_file: str | None = None,
+) -> FastAPI:
+    active_rules_file = rules_file or settings.rules_file
     log_broker = broker or LogBroker(
         bootstrap_servers=settings.kafka_bootstrap_servers,
         default_topic=settings.default_topic,
@@ -129,6 +134,47 @@ def create_app(broker: LogBroker | None = None) -> FastAPI:
             timeout_ms=timeout_ms,
         )
         return JSONResponse(_parse_json_lines(raw_json_lines))
+
+    @app.get("/rules", response_class=JSONResponse)
+    async def get_rules() -> JSONResponse:
+        try:
+            rules = load_rules(active_rules_file)
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return JSONResponse(rules)
+
+    @app.put("/rules", response_class=JSONResponse)
+    async def update_rules(payload: Any = Body(...)) -> JSONResponse:
+        try:
+            saved = save_rules(payload, active_rules_file)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(saved)
+
+    @app.post("/rules/evaluate", response_class=JSONResponse)
+    async def evaluate_rules_endpoint(payload: dict[str, Any] = Body(...)) -> JSONResponse:
+        message = payload.get("message")
+        if not isinstance(message, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="Request body must include a 'message' JSON object.",
+            )
+        override_rules = payload.get("rules")
+        try:
+            rules = (
+                validate_rules(override_rules)
+                if override_rules is not None
+                else load_rules(active_rules_file)
+            )
+            matches = evaluate_message(message, rules)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(
+            {
+                "matched": len(matches) > 0,
+                "matched_rules": [m.model_dump() for m in matches],
+            }
+        )
 
     return app
 

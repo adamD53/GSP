@@ -3,6 +3,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 LogLevel = Literal["DEBUG", "INFO", "WARN", "ERROR", "FATAL", "UNKNOWN"]
+RuleSeverity = Literal["critical", "high", "medium", "low"]
+
+
+class RuleMatch(BaseModel):
+    id: str = Field(description="Rule identifier.")
+    name: str = Field(description="Human-readable rule name.")
+    severity: RuleSeverity = Field(default="medium", description="Alert severity.")
 
 
 class LLMExtractedLog(BaseModel):
@@ -32,3 +39,11 @@ class LLMExtractedLog(BaseModel):
 
 class ParsedLog(LLMExtractedLog):
     raw: str = Field(description="Original unmodified raw log string.")
+    matched_rules: list[RuleMatch] = Field(
+        default_factory=list,
+        description="Rulebook rules matched against this parsed log.",
+    )
+    alert: bool = Field(
+        default=False,
+        description="True when one or more rulebook rules matched.",
+    )

@@ -5,11 +5,13 @@ import {
   AlertOctagon,
   FileText,
   Search,
+  ShieldAlert,
   Sparkles,
   Trash2,
   X,
 } from "lucide-react";
 import { LogDetailSheet } from "@/components/log-detail-sheet";
+import { RulebookPanel } from "@/components/rulebook-panel";
 import { SeverityBadge } from "@/components/severity-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -79,11 +81,27 @@ export function LLMLogsPanel({
 }: LLMLogsPanelProps) {
   const [search, setSearch] = useState("");
   const [levelFilter, setLevelFilter] = useState<LogLevel | "ALL">("ALL");
+  const [alertsOnly, setAlertsOnly] = useState(false);
   const [inspectedLog, setInspectedLog] = useState<ParsedLogEntry | null>(null);
+
+  const alertCount = useMemo(
+    () =>
+      logs.filter(
+        (entry) =>
+          entry.alert || (entry.matched_rules && entry.matched_rules.length > 0)
+      ).length,
+    [logs]
+  );
 
   const filteredLogs = useMemo(() => {
     const q = search.trim().toLowerCase();
     return logs.filter((entry) => {
+      if (
+        alertsOnly &&
+        !(entry.alert || (entry.matched_rules && entry.matched_rules.length > 0))
+      ) {
+        return false;
+      }
       if (
         selectedService &&
         (entry.service ?? "").toLowerCase() !== selectedService.toLowerCase()
@@ -101,12 +119,13 @@ export function LLMLogsPanel({
         entry.level,
         entry.raw,
         JSON.stringify(entry.metadata ?? {}),
+        (entry.matched_rules ?? []).map((r) => `${r.id} ${r.name}`).join(" "),
       ]
         .join(" ")
         .toLowerCase();
       return haystack.includes(q);
     });
-  }, [logs, selectedService, levelFilter, search]);
+  }, [logs, selectedService, levelFilter, alertsOnly, search]);
 
   return (
     <>
@@ -157,6 +176,10 @@ export function LLMLogsPanel({
                 <TabsTrigger value="raw" className="gap-1.5">
                   <FileText className="size-3.5" />
                   Raw Logs
+                </TabsTrigger>
+                <TabsTrigger value="rules" className="gap-1.5">
+                  <ShieldAlert className="size-3.5" />
+                  Rulebook
                 </TabsTrigger>
               </TabsList>
 
@@ -211,6 +234,23 @@ export function LLMLogsPanel({
                     ))}
                   </SelectContent>
                 </Select>
+
+                <Button
+                  type="button"
+                  variant={alertsOnly ? "destructive" : "outline"}
+                  size="sm"
+                  onClick={() => setAlertsOnly((prev) => !prev)}
+                  className="gap-1.5 text-xs"
+                >
+                  <ShieldAlert className="size-3.5" />
+                  Alerts
+                  <Badge
+                    variant={alertsOnly ? "secondary" : "outline"}
+                    className="font-mono text-[10px]"
+                  >
+                    {alertCount}
+                  </Badge>
+                </Button>
               </div>
 
               <div className="flex-1 overflow-hidden rounded-lg border">
@@ -267,9 +307,22 @@ export function LLMLogsPanel({
                                 )}
                               </TableCell>
                               <TableCell className="max-w-[460px] whitespace-normal">
-                                <p className="text-sm font-medium leading-snug text-foreground">
-                                  {entry.summary || entry.message}
-                                </p>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <p className="text-sm font-medium leading-snug text-foreground">
+                                    {entry.summary || entry.message}
+                                  </p>
+                                  {entry.matched_rules &&
+                                    entry.matched_rules.map((rule) => (
+                                      <Badge
+                                        key={rule.id}
+                                        variant="destructive"
+                                        className="gap-1 font-mono text-[10px]"
+                                      >
+                                        <ShieldAlert className="size-2.5" />
+                                        {rule.name}
+                                      </Badge>
+                                    ))}
+                                </div>
                                 {entry.message &&
                                   entry.message !== entry.summary && (
                                     <p className="mt-0.5 line-clamp-1 font-mono text-xs text-muted-foreground">
@@ -366,6 +419,10 @@ export function LLMLogsPanel({
                   </p>
                 )}
               </ScrollArea>
+            </TabsContent>
+
+            <TabsContent value="rules" className="mt-3 flex-1 overflow-hidden">
+              <RulebookPanel />
             </TabsContent>
           </Tabs>
         </CardContent>

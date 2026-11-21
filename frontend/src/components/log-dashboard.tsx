@@ -60,6 +60,13 @@ function normalizeLog(rawObj: Partial<ParsedLog>, idPrefix: string): ParsedLogEn
         ? (rawObj.metadata as Record<string, unknown>)
         : {},
     raw: rawObj.raw ?? "",
+    matched_rules: Array.isArray(rawObj.matched_rules)
+      ? rawObj.matched_rules
+      : [],
+    alert: Boolean(
+      rawObj.alert ||
+        (Array.isArray(rawObj.matched_rules) && rawObj.matched_rules.length > 0)
+    ),
     _id: `${idPrefix}-${Math.random().toString(36).slice(2, 10)}`,
     _receivedAt: Date.now(),
   };

@@ -9,6 +9,7 @@ from aiokafka import AIOKafkaConsumer
 from app.config import settings
 from app.kafka_client import LogBroker, _safe_stop_consumer
 from app.ollama_client import OllamaLogParser
+from app.rules import evaluate_message_file
 from app.schemas import ParsedLog
 
 logging.basicConfig(
@@ -32,10 +33,29 @@ async def process_raw_message(
     broker: ProducerProtocol,
     parsed_topic: str,
     dead_letter_topic: str,
+    rules_file: str | None = None,
 ) -> bool:
-    """Parse one raw log string and route to parsed_topic or dead_letter_topic."""
+    """Parse one raw log string, evaluate rulebook, and route to parsed or DLQ."""
     try:
         parsed = await parser.parse(raw_text)
+        active_rules_file = rules_file if rules_file is not None else settings.rules_file
+        try:
+            matches = evaluate_message_file(parsed.model_dump(), active_rules_file)
+        except Exception as rule_exc:
+            logger.warning("Rule evaluation skipped due to error: %s", rule_exc)
+            matches = []
+
+        if matches:
+            parsed = parsed.model_copy(
+                update={"matched_rules": matches, "alert": True}
+            )
+            logger.info(
+                "Rule match (%s) on service=%s level=%s",
+                ", ".join(m.id for m in matches),
+                parsed.service,
+                parsed.level,
+            )
+
         await broker.send_raw(
             parsed.model_dump_json().encode("utf-8"),
             topic=parsed_topic,

@@ -57,6 +57,9 @@ services:
       DEFAULT_TOPIC: ${DEFAULT_TOPIC:-raw-logs}
       PARSED_TOPIC: ${PARSED_TOPIC:-parsed-logs}
       DEAD_LETTER_TOPIC: ${DEAD_LETTER_TOPIC:-dead-letter-logs}
+      RULES_FILE: /app/rules.json
+    volumes:
+      - ./rules.json:/app/rules.json
     ports:
       - "${API_PORT:-8000}:8000"
     healthcheck:
@@ -82,6 +85,9 @@ services:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-60}
+      RULES_FILE: /app/rules.json
+    volumes:
+      - ./rules.json:/app/rules.json
 
   ui:
     build: ./frontend

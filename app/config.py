@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     ollama_timeout_seconds: float = 60.0
     startup_retries: int = 10
     startup_retry_delay: float = 1.5
+    rules_file: str = "rules.json"
 
 
 settings = Settings()

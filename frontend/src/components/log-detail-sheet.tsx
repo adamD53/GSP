@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Copy, Sparkles } from "lucide-react";
+import { Check, Copy, ShieldAlert, Sparkles } from "lucide-react";
 import { SeverityBadge } from "@/components/severity-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -81,6 +81,26 @@ export function LogDetailSheet({ log, onClose }: LogDetailSheetProps) {
                       {log.summary || "—"}
                     </p>
                   </div>
+
+                  {log.matched_rules && log.matched_rules.length > 0 && (
+                    <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3">
+                      <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-rose-700 dark:text-rose-300">
+                        <ShieldAlert className="size-3.5" />
+                        Triggered Rulebook Alerts ({log.matched_rules.length})
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {log.matched_rules.map((rule) => (
+                          <Badge
+                            key={rule.id}
+                            variant="destructive"
+                            className="font-mono text-[11px]"
+                          >
+                            {rule.name} ({rule.severity})
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   <div className="space-y-1.5">
                     <h4 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
