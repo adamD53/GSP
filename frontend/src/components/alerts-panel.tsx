@@ -10,9 +10,7 @@ import {
   History,
   Mail,
   MessageSquare,
-  Play,
   RotateCcw,
-  ShieldCheck,
   User,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -56,24 +54,16 @@ interface AlertsPanelProps {
     action: "ack" | "resolve" | "reopen",
     actor: string
   ) => Promise<void>;
-  onExecuteStep: (
-    alertId: string,
-    stepIndex: number,
-    actor: string,
-    approved: boolean
-  ) => Promise<void>;
 }
 
 export function AlertsPanel({
   alerts,
   selectedService,
   onTransition,
-  onExecuteStep,
 }: AlertsPanelProps) {
   const [statusFilter, setStatusFilter] = useState<AlertStatus | "all">("all");
   const [actor, setActor] = useState("oncall");
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [busyStepKey, setBusyStepKey] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [openRunbookId, setOpenRunbookId] = useState<string | null>(null);
 
@@ -111,20 +101,6 @@ export function AlertsPanel({
       await onTransition(alertId, action, actor.trim() || "oncall");
     } finally {
       setBusyId(null);
-    }
-  }
-
-  async function handleStepRun(
-    alertId: string,
-    stepIndex: number,
-    approved: boolean
-  ) {
-    const key = `${alertId}:${stepIndex}`;
-    setBusyStepKey(key);
-    try {
-      await onExecuteStep(alertId, stepIndex, actor.trim() || "oncall", approved);
-    } finally {
-      setBusyStepKey(null);
     }
   }
 
@@ -381,104 +357,40 @@ export function AlertsPanel({
 
                         <div className="space-y-1.5">
                           {alert.runbook.steps.map((step) => {
-                            const exec = (alert.step_executions ?? [])
-                              .slice()
-                              .reverse()
-                              .find((e) => e.step_index === step.index);
-                            const stepBusy =
-                              busyStepKey === `${alert.id}:${step.index}`;
                             const needsApproval = step.approval === "required";
-
                             return (
                               <div
                                 key={step.index}
                                 className="rounded-md border bg-card px-2.5 py-2 text-xs"
                               >
-                                <div className="flex flex-wrap items-start justify-between gap-2">
-                                  <div className="min-w-0 flex-1 space-y-0.5">
-                                    <div className="flex flex-wrap items-center gap-1.5">
-                                      <span className="font-mono text-[11px] text-muted-foreground">
-                                        #{step.index + 1}
-                                      </span>
-                                      <span className="font-medium text-foreground">
-                                        {step.label}
-                                      </span>
-                                      {step.action && (
-                                        <Badge
-                                          variant="secondary"
-                                          className="font-mono text-[10px]"
-                                        >
-                                          {step.action}
-                                        </Badge>
-                                      )}
-                                      {needsApproval && !exec && (
-                                        <Badge
-                                          variant="outline"
-                                          className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 font-mono text-[10px]"
-                                        >
-                                          Approval Required
-                                        </Badge>
-                                      )}
-                                    </div>
-                                    {step.condition_note && (
-                                      <p className="font-mono text-[11px] text-muted-foreground">
-                                        if: {step.condition_note}
-                                      </p>
-                                    )}
-                                  </div>
-
-                                  <div className="shrink-0">
-                                    {exec ? (
-                                      <Badge
-                                        variant="outline"
-                                        className="border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 gap-1 font-mono text-[10px]"
-                                      >
-                                        <CheckCircle2 className="size-3" />
-                                        {exec.approved ? "Approved & Ran" : "Ran"}
-                                      </Badge>
-                                    ) : needsApproval ? (
-                                      <Button
-                                        size="xs"
-                                        variant="destructive"
-                                        disabled={stepBusy}
-                                        onClick={() =>
-                                          void handleStepRun(
-                                            alert.id,
-                                            step.index,
-                                            true
-                                          )
-                                        }
-                                        className="gap-1"
-                                      >
-                                        <ShieldCheck className="size-3" />
-                                        {stepBusy ? "Running..." : "Approve & Run"}
-                                      </Button>
-                                    ) : (
-                                      <Button
-                                        size="xs"
-                                        variant="outline"
-                                        disabled={stepBusy}
-                                        onClick={() =>
-                                          void handleStepRun(
-                                            alert.id,
-                                            step.index,
-                                            false
-                                          )
-                                        }
-                                        className="gap-1"
-                                      >
-                                        <Play className="size-3" />
-                                        {stepBusy ? "Running..." : "Run Step"}
-                                      </Button>
-                                    )}
-                                  </div>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span className="font-mono text-[11px] text-muted-foreground">
+                                    #{step.index + 1}
+                                  </span>
+                                  <span className="font-medium text-foreground">
+                                    {step.label}
+                                  </span>
+                                  {step.action && (
+                                    <Badge
+                                      variant="secondary"
+                                      className="font-mono text-[10px]"
+                                    >
+                                      {step.action}
+                                    </Badge>
+                                  )}
+                                  {needsApproval && (
+                                    <Badge
+                                      variant="outline"
+                                      className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 font-mono text-[10px]"
+                                    >
+                                      Approval Required
+                                    </Badge>
+                                  )}
                                 </div>
-
-                                {exec && (
-                                  <div className="mt-1.5 rounded bg-muted/60 px-2 py-1 font-mono text-[11px] text-emerald-700 dark:text-emerald-300">
-                                    [{exec.actor} @ {formatTime(exec.executed_at)}]{" "}
-                                    {exec.output}
-                                  </div>
+                                {step.condition_note && (
+                                  <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+                                    if: {step.condition_note}
+                                  </p>
                                 )}
                               </div>
                             );

@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import {
-  AlertOctagon,
   BellRing,
   BookOpen,
   Clock,
@@ -52,7 +51,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   LOG_LEVELS,
   type AlertRecord,
-  type DeadLetterLog,
   type LogLevel,
   type ParsedLogEntry,
 } from "@/lib/types";
@@ -60,7 +58,6 @@ import {
 interface LLMLogsPanelProps {
   logs: ParsedLogEntry[];
   alerts: AlertRecord[];
-  deadLetters: DeadLetterLog[];
   rawLogs: string;
   selectedService: string | null;
   expanded: boolean;
@@ -71,12 +68,6 @@ interface LLMLogsPanelProps {
     alertId: string,
     action: "ack" | "resolve" | "reopen",
     actor: string
-  ) => Promise<void>;
-  onExecuteAlertStep: (
-    alertId: string,
-    stepIndex: number,
-    actor: string,
-    approved: boolean
   ) => Promise<void>;
 }
 
@@ -97,7 +88,6 @@ function formatShortTime(ts: string | null): string {
 export function LLMLogsPanel({
   logs,
   alerts,
-  deadLetters,
   rawLogs,
   selectedService,
   expanded,
@@ -105,7 +95,6 @@ export function LLMLogsPanel({
   onClearServiceFilter,
   onClearLogs,
   onTransitionAlert,
-  onExecuteAlertStep,
 }: LLMLogsPanelProps) {
   const openAlertsCount = useMemo(
     () => alerts.filter((a) => a.status === "open").length,
@@ -221,16 +210,6 @@ export function LLMLogsPanel({
                     className="ml-0.5 font-mono text-[10px]"
                   >
                     {openAlertsCount}
-                  </Badge>
-                </TabsTrigger>
-                <TabsTrigger value="dlq" className="gap-1.5">
-                  <AlertOctagon className="size-3.5" />
-                  Dead-Letter
-                  <Badge
-                    variant={deadLetters.length > 0 ? "destructive" : "secondary"}
-                    className="ml-0.5 font-mono text-[10px]"
-                  >
-                    {deadLetters.length}
                   </Badge>
                 </TabsTrigger>
                 <TabsTrigger value="raw" className="gap-1.5">
@@ -446,56 +425,6 @@ export function LLMLogsPanel({
               </div>
             </TabsContent>
 
-            <TabsContent value="dlq" className="mt-3 flex-1">
-              <div className="rounded-lg border">
-                <div className="min-h-[420px] overflow-x-auto">
-                  {deadLetters.length === 0 ? (
-                    <div className="flex min-h-[360px] flex-col items-center justify-center p-6 text-center">
-                      <AlertOctagon className="mb-2 size-7 text-muted-foreground/50" />
-                      <p className="text-sm font-medium">
-                        Dead-letter queue is empty
-                      </p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Logs that fail ingestion or schema validation appear
-                        here with their error reason.
-                      </p>
-                    </div>
-                  ) : (
-                    <Table>
-                      <TableHeader className="sticky top-0 z-10 bg-muted/80 backdrop-blur-xs">
-                        <TableRow>
-                          <TableHead className="w-1/3">Parser Error</TableHead>
-                          <TableHead>Raw Payload</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {deadLetters.map((item, idx) => (
-                          <TableRow key={idx} className="align-top">
-                            <TableCell className="whitespace-normal">
-                              <Badge
-                                variant="destructive"
-                                className="mb-1 font-mono text-[10px]"
-                              >
-                                DLQ
-                              </Badge>
-                              <p className="font-mono text-xs text-rose-700 dark:text-rose-300">
-                                {item.error}
-                              </p>
-                            </TableCell>
-                            <TableCell className="whitespace-normal">
-                              <pre className="font-mono text-xs text-muted-foreground whitespace-pre-wrap break-all">
-                                {item.raw}
-                              </pre>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  )}
-                </div>
-              </div>
-            </TabsContent>
-
             <TabsContent value="raw" className="mt-3 flex-1">
               <div className="min-h-[420px] overflow-x-auto rounded-lg border bg-zinc-950 p-4 text-zinc-100">
                 {rawLogs.trim() ? (
@@ -515,7 +444,6 @@ export function LLMLogsPanel({
                 alerts={alerts}
                 selectedService={selectedService}
                 onTransition={onTransitionAlert}
-                onExecuteStep={onExecuteAlertStep}
               />
             </TabsContent>
 

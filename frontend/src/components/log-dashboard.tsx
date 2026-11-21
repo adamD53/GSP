@@ -10,7 +10,6 @@ import { MetricsRow } from "@/components/metrics-row";
 import { ServicesPanel } from "@/components/services-panel";
 import type {
   AlertRecord,
-  DeadLetterLog,
   LogLevel,
   ParsedLog,
   ParsedLogEntry,
@@ -82,7 +81,6 @@ export function LogDashboard() {
 
   const [logs, setLogs] = useState<ParsedLogEntry[]>([]);
   const [alerts, setAlerts] = useState<AlertRecord[]>([]);
-  const [deadLetters, setDeadLetters] = useState<DeadLetterLog[]>([]);
   const [rawLogs, setRawLogs] = useState("");
   const [selectedService, setSelectedService] = useState<string | null>(null);
 
@@ -201,39 +199,13 @@ export function LogDashboard() {
     []
   );
 
-  const handleExecuteAlertStep = useCallback(
-    async (
-      alertId: string,
-      stepIndex: number,
-      actor: string,
-      approved: boolean
-    ) => {
-      const res = await fetch(
-        `/api/alerts/${encodeURIComponent(alertId)}/steps/${stepIndex}/execute`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ actor, approved }),
-        }
-      );
-      if (res.ok) {
-        const updated = (await res.json()) as AlertRecord;
-        setAlerts((prev) =>
-          prev.map((a) => (a.id === updated.id ? updated : a))
-        );
-      }
-    },
-    []
-  );
-
   const fetchSnapshot = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      const [parsedRes, dlqRes, rawRes, alertsRes] = await Promise.allSettled([
+      const [parsedRes, rawRes, alertsRes] = await Promise.allSettled([
         fetch("/api/logs/parsed?limit=200&from_beginning=true", {
           cache: "no-store",
         }),
-        fetch("/api/logs/dead-letter?limit=100", { cache: "no-store" }),
         fetch("/api/logs?limit=200&from_beginning=true", { cache: "no-store" }),
         fetch("/api/alerts?limit=200", { cache: "no-store" }),
       ]);
@@ -245,13 +217,6 @@ export function LogDashboard() {
             .map((item, idx) => normalizeLog(item, `snap-${idx}`))
             .reverse();
           setLogs(normalized.slice(0, MAX_LOGS_IN_MEMORY));
-        }
-      }
-
-      if (dlqRes.status === "fulfilled" && dlqRes.value.ok) {
-        const data = await dlqRes.value.json();
-        if (Array.isArray(data)) {
-          setDeadLetters(data.reverse());
         }
       }
 
@@ -418,7 +383,7 @@ export function LogDashboard() {
           errorCount={errorCount}
           registeredServiceCount={services.length}
           discoveredServiceCount={discoveredServiceCount}
-          deadLetterCount={deadLetters.length}
+          openAlertCount={alerts.filter((a) => a.status === "open").length}
           streamConnected={streamConnected}
         />
 
@@ -451,7 +416,6 @@ export function LogDashboard() {
             <LLMLogsPanel
               logs={logs}
               alerts={alerts}
-              deadLetters={deadLetters}
               rawLogs={rawLogs}
               selectedService={selectedService}
               expanded={mainExpanded}
@@ -459,7 +423,6 @@ export function LogDashboard() {
               onClearServiceFilter={() => setSelectedService(null)}
               onClearLogs={() => setLogs([])}
               onTransitionAlert={handleTransitionAlert}
-              onExecuteAlertStep={handleExecuteAlertStep}
             />
           </section>
         </div>

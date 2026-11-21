@@ -2,8 +2,8 @@
 
 import {
   AlertTriangle,
+  BellRing,
   Boxes,
-  FileWarning,
   ScrollText,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,7 +13,7 @@ interface MetricsRowProps {
   errorCount: number;
   registeredServiceCount: number;
   discoveredServiceCount: number;
-  deadLetterCount: number;
+  openAlertCount: number;
   streamConnected: boolean;
 }
 
@@ -22,7 +22,7 @@ export function MetricsRow({
   errorCount,
   registeredServiceCount,
   discoveredServiceCount,
-  deadLetterCount,
+  openAlertCount,
   streamConnected,
 }: MetricsRowProps) {
   const errorRate =
@@ -95,20 +95,20 @@ export function MetricsRow({
       <Card size="sm">
         <CardHeader className="flex flex-row items-center justify-between pb-1">
           <CardTitle className="text-xs font-medium text-muted-foreground">
-            Dead-Letter Queue
+            Open Alerts
           </CardTitle>
-          <FileWarning
+          <BellRing
             className={`size-4 ${
-              deadLetterCount > 0 ? "text-amber-500" : "text-muted-foreground"
+              openAlertCount > 0 ? "text-rose-500" : "text-muted-foreground"
             }`}
           />
         </CardHeader>
         <CardContent>
           <div className="text-2xl font-bold tracking-tight tabular-nums">
-            {deadLetterCount}
+            {openAlertCount}
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {deadLetterCount > 0 ? "Needs review" : "No failed events"}
+            {openAlertCount > 0 ? "Awaiting ack or resolve" : "All alerts clear"}
           </p>
         </CardContent>
       </Card>
