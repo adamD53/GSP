@@ -47,7 +47,7 @@ async def process_raw_message(
         all_decisions: list[NotificationDecision] = []
 
         try:
-            rules = load_rules(active_rules_file)
+            rules = load_rules(active_rules_file, strict=False)
         except Exception as rule_exc:
             logger.warning("Failed to load rules file: %s", rule_exc)
             rules = []
@@ -56,60 +56,59 @@ async def process_raw_message(
         for single_rule in rules:
             try:
                 per_rule = evaluate_per_rule(eval_doc, [single_rule])
-            except Exception as rule_exc:
-                logger.warning(
-                    "Skipping rule '%s' due to evaluation error: %s",
-                    single_rule.get("id", "unknown"),
-                    rule_exc,
-                )
-                continue
-
-            for rule_match, rule_dict, decisions in per_rule:
-                matches.append(rule_match)
-                if alert_store is not None:
-                    alert_rec, should_notify = alert_store.record_match(
-                        parsed_log=parsed,
-                        rule_match=rule_match,
-                        rule_dict=rule_dict,
-                        notifications=decisions,
-                    )
-                    if should_notify:
+                for rule_match, rule_dict, decisions in per_rule:
+                    matches.append(rule_match)
+                    if alert_store is not None:
+                        alert_rec, should_notify = alert_store.record_match(
+                            parsed_log=parsed,
+                            rule_match=rule_match,
+                            rule_dict=rule_dict,
+                            notifications=decisions,
+                        )
+                        if should_notify:
+                            dispatched = await dispatch_notifications(
+                                decisions,
+                                log_summary=parsed.summary or parsed.message,
+                                service=parsed.service,
+                            )
+                            alert_store.update_notifications(alert_rec.id, dispatched)
+                            if any(d.status == "failed" for d in dispatched):
+                                alert_store.enqueue_failed_notifications(
+                                    alert_id=alert_rec.id,
+                                    decisions=dispatched,
+                                    log_summary=parsed.summary or parsed.message,
+                                    service=parsed.service,
+                                )
+                            all_decisions.extend(dispatched)
+                        else:
+                            suppressed = [
+                                d.model_copy(
+                                    update={
+                                        "status": "suppressed",
+                                        "reason": (
+                                            f"Deduplicated into {alert_rec.id} "
+                                            f"(occurrence #{alert_rec.count} within "
+                                            f"{alert_rec.dedup_window_seconds}s)"
+                                        ),
+                                    }
+                                )
+                                for d in decisions
+                            ]
+                            all_decisions.extend(suppressed)
+                    else:
                         dispatched = await dispatch_notifications(
                             decisions,
                             log_summary=parsed.summary or parsed.message,
                             service=parsed.service,
                         )
-                        alert_store.update_notifications(alert_rec.id, dispatched)
-                        if any(d.status == "failed" for d in dispatched):
-                            alert_store.enqueue_failed_notifications(
-                                alert_id=alert_rec.id,
-                                decisions=dispatched,
-                                log_summary=parsed.summary or parsed.message,
-                                service=parsed.service,
-                            )
                         all_decisions.extend(dispatched)
-                    else:
-                        suppressed = [
-                            d.model_copy(
-                                update={
-                                    "status": "suppressed",
-                                    "reason": (
-                                        f"Deduplicated into {alert_rec.id} "
-                                        f"(occurrence #{alert_rec.count} within "
-                                        f"{alert_rec.dedup_window_seconds}s)"
-                                    ),
-                                }
-                            )
-                            for d in decisions
-                        ]
-                        all_decisions.extend(suppressed)
-                else:
-                    dispatched = await dispatch_notifications(
-                        decisions,
-                        log_summary=parsed.summary or parsed.message,
-                        service=parsed.service,
-                    )
-                    all_decisions.extend(dispatched)
+            except Exception as rule_exc:
+                logger.warning(
+                    "Skipping rule '%s' due to error: %s",
+                    single_rule.get("id", "unknown") if isinstance(single_rule, dict) else "unknown",
+                    rule_exc,
+                )
+                continue
 
         if matches:
             parsed = parsed.model_copy(

@@ -1,4 +1,5 @@
 import json
+import logging
 import operator
 import re
 from datetime import datetime
@@ -11,6 +12,8 @@ from app.notifications import (
     resolve_notifications_for_rules,
 )
 from app.schemas import NotificationDecision, RuleMatch, RuleSeverity
+
+logger = logging.getLogger("log_rules")
 
 _MISSING = object()
 _NUMERIC_OPS = {"gt", "gte", "lt", "lte"}
@@ -246,13 +249,17 @@ def evaluate_message(
     return matched
 
 
-def load_rules(rules_file: str | Path = "rules.json") -> list[dict[str, Any]]:
+def load_rules(
+    rules_file: str | Path = "rules.json",
+    *,
+    strict: bool = True,
+) -> list[dict[str, Any]]:
     path = Path(rules_file)
     if not path.exists():
         return []
 
     mtime = path.stat().st_mtime
-    cache_key = str(path.resolve())
+    cache_key = f"{path.resolve()}::{'strict' if strict else 'lenient'}"
     cached = _RULES_CACHE.get(cache_key)
     if cached and cached[0] == mtime:
         return cached[1]
@@ -260,7 +267,18 @@ def load_rules(rules_file: str | Path = "rules.json") -> list[dict[str, Any]]:
     with path.open("r", encoding="utf-8") as fh:
         raw = json.load(fh)
 
-    normalized = validate_rules(raw)
+    if strict:
+        normalized = validate_rules(raw)
+    else:
+        raw_list = [raw] if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
+        normalized = []
+        for idx, item in enumerate(raw_list):
+            try:
+                normalized.extend(validate_rules([item]))
+            except ValueError as exc:
+                rule_id = item.get("id", f"index-{idx}") if isinstance(item, dict) else f"index-{idx}"
+                logger.warning("Skipping invalid rule '%s': %s", rule_id, exc)
+
     _RULES_CACHE[cache_key] = (mtime, normalized)
     return normalized
 
@@ -276,8 +294,10 @@ def save_rules(
         json.dump(normalized, fh, indent=2)
         fh.write("\n")
 
-    cache_key = str(path.resolve())
-    _RULES_CACHE[cache_key] = (path.stat().st_mtime, normalized)
+    mtime = path.stat().st_mtime
+    resolved = str(path.resolve())
+    _RULES_CACHE[f"{resolved}::strict"] = (mtime, normalized)
+    _RULES_CACHE[f"{resolved}::lenient"] = (mtime, normalized)
     return normalized
 
 

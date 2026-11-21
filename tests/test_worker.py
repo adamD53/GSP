@@ -1,9 +1,11 @@
 import asyncio
 import json
 from collections import defaultdict
+from pathlib import Path
 
 import httpx
 
+from app import worker as worker_mod
 from app.ollama_client import OllamaLogParser
 from app.schemas import ParsedLog
 from app.worker import process_raw_message
@@ -119,3 +121,76 @@ def test_worker_routes_failure_to_dlq() -> None:
     dlq = json.loads(producer.sent["dead-letter-logs"][0].decode("utf-8"))
     assert dlq["raw"] == "corrupt input"
     assert "ollama unavailable" in dlq["error"]
+
+
+def test_one_bad_rule_does_not_disable_other_rules(tmp_path: Path, monkeypatch) -> None:
+    rules_path = tmp_path / "rules.json"
+    rules_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "invalid-op-rule",
+                    "name": "Bad Operator",
+                    "severity": "high",
+                    "field": "/level",
+                    "operator": "approx",  # invalid
+                    "value": "ERROR",
+                },
+                {
+                    "id": "runtime-boom-rule",
+                    "name": "Runtime Boom",
+                    "severity": "high",
+                    "field": "/level",
+                    "operator": "eq",
+                    "value": "ERROR",
+                },
+                {
+                    "id": "valid-error-rule",
+                    "name": "Valid Error Rule",
+                    "severity": "critical",
+                    "field": "/level",
+                    "operator": "eq",
+                    "value": "ERROR",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    real_eval = worker_mod.evaluate_per_rule
+
+    def flaky_eval(message, rules, *args, **kwargs):
+        if rules and rules[0].get("id") == "runtime-boom-rule":
+            raise RuntimeError("boom in rule evaluation")
+        return real_eval(message, rules, *args, **kwargs)
+
+    monkeypatch.setattr(worker_mod, "evaluate_per_rule", flaky_eval)
+
+    class StaticParser:
+        async def parse(self, raw_log: str) -> ParsedLog:
+            return ParsedLog(
+                timestamp=None,
+                level="ERROR",
+                service="payments-api",
+                message="db failure",
+                summary="db failure",
+                metadata={},
+                raw=raw_log,
+            )
+
+    producer = FakeProducer()
+    ok = asyncio.run(
+        process_raw_message(
+            raw_text="ERROR payments-api db failure",
+            parser=StaticParser(),
+            broker=producer,
+            parsed_topic="parsed-logs",
+            dead_letter_topic="dead-letter-logs",
+            rules_file=str(rules_path),
+        )
+    )
+    assert ok is True
+    assert len(producer.sent["parsed-logs"]) == 1
+    saved = json.loads(producer.sent["parsed-logs"][0].decode("utf-8"))
+    assert saved["alert"] is True
+    assert [m["id"] for m in saved["matched_rules"]] == ["valid-error-rule"]
