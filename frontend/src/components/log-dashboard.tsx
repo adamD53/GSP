@@ -199,6 +199,36 @@ export function LogDashboard() {
     []
   );
 
+  const handleExecuteAlertStep = useCallback(
+    async (
+      alertId: string,
+      stepIndex: number,
+      actor: string,
+      approved: boolean
+    ) => {
+      const res = await fetch(
+        `/api/alerts/${encodeURIComponent(alertId)}/steps/${stepIndex}/execute`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ actor, approved }),
+        }
+      );
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(
+          (data && (data.detail || data.error)) ||
+            `Step execution failed (HTTP ${res.status})`
+        );
+      }
+      const updated = data as AlertRecord;
+      setAlerts((prev) =>
+        prev.map((a) => (a.id === updated.id ? updated : a))
+      );
+    },
+    []
+  );
+
   const fetchSnapshot = useCallback(async () => {
     setIsRefreshing(true);
     try {
@@ -460,6 +490,7 @@ export function LogDashboard() {
               onClearServiceFilter={() => setSelectedService(null)}
               onClearLogs={() => setLogs([])}
               onTransitionAlert={handleTransitionAlert}
+              onExecuteAlertStep={handleExecuteAlertStep}
             />
           </section>
         </div>

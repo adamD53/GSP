@@ -69,6 +69,12 @@ interface LLMLogsPanelProps {
     action: "ack" | "resolve" | "reopen",
     actor: string
   ) => Promise<void>;
+  onExecuteAlertStep: (
+    alertId: string,
+    stepIndex: number,
+    actor: string,
+    approved: boolean
+  ) => Promise<void>;
 }
 
 function formatShortTime(ts: string | null): string {
@@ -95,6 +101,7 @@ export function LLMLogsPanel({
   onClearServiceFilter,
   onClearLogs,
   onTransitionAlert,
+  onExecuteAlertStep,
 }: LLMLogsPanelProps) {
   const openAlertsCount = useMemo(
     () => alerts.filter((a) => a.status === "open").length,
@@ -444,6 +451,7 @@ export function LLMLogsPanel({
                 alerts={alerts}
                 selectedService={selectedService}
                 onTransition={onTransitionAlert}
+                onExecuteStep={onExecuteAlertStep}
               />
             </TabsContent>
 

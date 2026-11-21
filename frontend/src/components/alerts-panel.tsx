@@ -11,7 +11,9 @@ import {
   Loader2,
   Mail,
   MessageSquare,
+  Play,
   RotateCcw,
+  ShieldCheck,
   Sparkles,
   User,
   X,
@@ -69,16 +71,27 @@ interface AlertsPanelProps {
     action: "ack" | "resolve" | "reopen",
     actor: string
   ) => Promise<void>;
+  onExecuteStep: (
+    alertId: string,
+    stepIndex: number,
+    actor: string,
+    approved: boolean
+  ) => Promise<void>;
 }
 
 export function AlertsPanel({
   alerts,
   selectedService,
   onTransition,
+  onExecuteStep,
 }: AlertsPanelProps) {
   const [statusFilter, setStatusFilter] = useState<AlertStatus | "all">("all");
   const [actor, setActor] = useState("oncall");
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [busyStepKey, setBusyStepKey] = useState<string | null>(null);
+  const [stepErrorByKey, setStepErrorByKey] = useState<Record<string, string>>(
+    {}
+  );
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [modalRunbookAlertId, setModalRunbookAlertId] = useState<string | null>(
     null
@@ -129,6 +142,31 @@ export function AlertsPanel({
       await onTransition(alertId, action, actor.trim() || "oncall");
     } finally {
       setBusyId(null);
+    }
+  }
+
+  async function handleStepRun(
+    alertId: string,
+    stepIndex: number,
+    approved: boolean
+  ) {
+    const key = `${alertId}:${stepIndex}`;
+    setBusyStepKey(key);
+    setStepErrorByKey((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    try {
+      await onExecuteStep(alertId, stepIndex, actor.trim() || "oncall", approved);
+    } catch (err) {
+      setStepErrorByKey((prev) => ({
+        ...prev,
+        [key]: err instanceof Error ? err.message : "Failed to execute step",
+      }));
+    } finally {
+      setBusyStepKey(null);
     }
   }
 
@@ -542,40 +580,119 @@ export function AlertsPanel({
                     Steps
                   </p>
                   {modalAlert.runbook.steps.map((step) => {
+                    const stepKey = `${modalAlert.id}:${step.index}`;
+                    const stepBusy = busyStepKey === stepKey;
+                    const stepError = stepErrorByKey[stepKey];
+                    const exec = (modalAlert.step_executions ?? [])
+                      .slice()
+                      .reverse()
+                      .find((e) => e.step_index === step.index);
                     const needsApproval = step.approval === "required";
+
                     return (
                       <div
                         key={step.index}
                         className="rounded-md border bg-card px-3 py-2 text-xs"
                       >
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="font-mono text-[11px] text-muted-foreground">
-                            #{step.index + 1}
-                          </span>
-                          <span className="font-medium text-foreground">
-                            {step.label}
-                          </span>
-                          {step.action && (
-                            <Badge
-                              variant="secondary"
-                              className="font-mono text-[10px]"
-                            >
-                              {step.action}
-                            </Badge>
-                          )}
-                          {needsApproval && (
-                            <Badge
-                              variant="outline"
-                              className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 font-mono text-[10px]"
-                            >
-                              Approval Required
-                            </Badge>
-                          )}
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1 space-y-1">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="font-mono text-[11px] text-muted-foreground">
+                                #{step.index + 1}
+                              </span>
+                              <span className="font-medium text-foreground">
+                                {step.label}
+                              </span>
+                              {step.action && (
+                                <Badge
+                                  variant="secondary"
+                                  className="font-mono text-[10px]"
+                                >
+                                  {step.action}
+                                </Badge>
+                              )}
+                              {needsApproval && !exec && (
+                                <Badge
+                                  variant="outline"
+                                  className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 font-mono text-[10px]"
+                                >
+                                  Approval Required
+                                </Badge>
+                              )}
+                              {exec && (
+                                <Badge
+                                  variant="outline"
+                                  className="border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-mono text-[10px]"
+                                >
+                                  {exec.approved ? "Approved & Ran" : "Executed"}
+                                </Badge>
+                              )}
+                            </div>
+                            {step.condition_note && (
+                              <p className="font-mono text-[11px] text-muted-foreground">
+                                if: {step.condition_note}
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            {needsApproval ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={stepBusy}
+                                onClick={() =>
+                                  void handleStepRun(
+                                    modalAlert.id,
+                                    step.index,
+                                    true
+                                  )
+                                }
+                                className="h-7 gap-1 border-amber-500/40 bg-amber-500/10 px-2.5 text-[11px] text-amber-700 hover:bg-amber-500/20 dark:text-amber-300"
+                              >
+                                {stepBusy ? (
+                                  <Loader2 className="size-3 animate-spin" />
+                                ) : (
+                                  <ShieldCheck className="size-3" />
+                                )}
+                                {exec ? "Approve & Re-run" : "Approve & Run"}
+                              </Button>
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                disabled={stepBusy}
+                                onClick={() =>
+                                  void handleStepRun(
+                                    modalAlert.id,
+                                    step.index,
+                                    false
+                                  )
+                                }
+                                className="h-7 gap-1 px-2.5 text-[11px]"
+                              >
+                                {stepBusy ? (
+                                  <Loader2 className="size-3 animate-spin" />
+                                ) : (
+                                  <Play className="size-3" />
+                                )}
+                                {exec ? "Re-run" : "Run"}
+                              </Button>
+                            )}
+                          </div>
                         </div>
-                        {step.condition_note && (
-                          <p className="mt-1 font-mono text-[11px] text-muted-foreground">
-                            if: {step.condition_note}
-                          </p>
+
+                        {exec && (
+                          <div className="mt-1.5 rounded bg-muted/60 px-2 py-1 font-mono text-[11px] text-emerald-700 dark:text-emerald-300">
+                            [{exec.actor} @ {formatTime(exec.executed_at)}]{" "}
+                            {exec.output}
+                          </div>
+                        )}
+
+                        {stepError && (
+                          <div className="mt-1.5 rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-700 dark:text-rose-300">
+                            {stepError}
+                          </div>
                         )}
                       </div>
                     );
