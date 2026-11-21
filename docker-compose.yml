@@ -24,6 +24,29 @@ services:
       retries: 10
       start_period: 5s
 
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["ollama pull \"$$OLLAMA_MODEL\""]
+    restart: "no"
+
   api:
     build: .
     depends_on:
@@ -32,6 +55,8 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-redpanda:9092}
       DEFAULT_TOPIC: ${DEFAULT_TOPIC:-raw-logs}
+      PARSED_TOPIC: ${PARSED_TOPIC:-parsed-logs}
+      DEAD_LETTER_TOPIC: ${DEAD_LETTER_TOPIC:-dead-letter-logs}
     ports:
       - "${API_PORT:-8000}:8000"
     healthcheck:
@@ -39,3 +64,24 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+  worker:
+    build: .
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-redpanda:9092}
+      DEFAULT_TOPIC: ${DEFAULT_TOPIC:-raw-logs}
+      PARSED_TOPIC: ${PARSED_TOPIC:-parsed-logs}
+      DEAD_LETTER_TOPIC: ${DEAD_LETTER_TOPIC:-dead-letter-logs}
+      CONSUMER_GROUP_ID: ${CONSUMER_GROUP_ID:-ollama-log-parser}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
+      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-60}
+
+volumes:
+  ollama_data:

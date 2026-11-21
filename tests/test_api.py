@@ -1,3 +1,4 @@
+import json
 from collections import defaultdict
 from collections.abc import AsyncIterator
 
@@ -28,7 +29,7 @@ class FakeLogBroker:
         topic: str | None = None,
         limit: int = 100,
         from_beginning: bool = True,
-        timeout_ms: int = 500,
+        timeout_ms: int = 2000,
     ) -> str:
         target = topic or self.default_topic
         items = self.messages.get(target, [])
@@ -94,3 +95,41 @@ def test_stream_raw_logs() -> None:
             assert resp.headers["content-type"].startswith("text/plain")
             body = "".join(resp.iter_text())
             assert body == "line-1\nline-2\n"
+
+
+def test_get_and_stream_parsed_logs() -> None:
+    broker = FakeLogBroker()
+    sample = {
+        "timestamp": "2026-11-21T03:00:00Z",
+        "level": "ERROR",
+        "service": "payment-service",
+        "message": "charge failed",
+        "summary": "Payment charge failed for user 42.",
+        "metadata": {"user_id": 42},
+        "raw": "2026-11-21T03:00:00Z ERROR payment-service charge failed user_id=42",
+    }
+    broker.messages["parsed-logs"].append(json.dumps(sample).encode("utf-8"))
+
+    with TestClient(create_app(broker=broker)) as client:
+        resp = client.get("/logs/parsed")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("application/json")
+        data = resp.json()
+        assert data == [sample]
+
+        with client.stream("GET", "/logs/parsed/stream?from_beginning=true") as sresp:
+            assert sresp.status_code == 200
+            assert sresp.headers["content-type"].startswith("application/x-ndjson")
+            lines = [line for line in sresp.iter_lines() if line]
+            assert [json.loads(line) for line in lines] == [sample]
+
+
+def test_get_dead_letter_logs() -> None:
+    broker = FakeLogBroker()
+    dlq_entry = {"raw": "bad line", "error": "Ollama timeout"}
+    broker.messages["dead-letter-logs"].append(json.dumps(dlq_entry).encode("utf-8"))
+
+    with TestClient(create_app(broker=broker)) as client:
+        resp = client.get("/logs/dead-letter")
+        assert resp.status_code == 200
+        assert resp.json() == [dlq_entry]
