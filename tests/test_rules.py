@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -9,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.ollama_client import OllamaLogParser
-from app.rules import check_message, evaluate_message, validate_rules
+from app.rules import check_message, evaluate_and_route, evaluate_message, validate_rules
 from app.worker import process_raw_message
 
 
@@ -235,3 +236,117 @@ def test_worker_attaches_matched_rules(tmp_path: Path) -> None:
     assert len(saved["matched_rules"]) == 1
     assert saved["matched_rules"][0]["id"] == "checkout-slow-error"
     assert saved["matched_rules"][0]["severity"] == "critical"
+
+
+def test_notification_routing_email_sms_and_working_hours() -> None:
+    rules = [
+        {
+            "id": "ops-alert",
+            "name": "Ops Alert",
+            "severity": "high",
+            "notify": [
+                {"channel": "email", "to": "ops@example.com"},
+                {"channel": "sms", "to": "+15551112222", "working_hours_only": False},
+                {"channel": "sms", "to": "+15559998888", "working_hours_only": True},
+                "sms_working_hours",
+            ],
+            "field": "/level",
+            "operator": "eq",
+            "value": "ERROR",
+        }
+    ]
+    msg = {"level": "ERROR"}
+
+    # Tuesday 14:00 UTC -> inside default 09:00-17:00 Mon-Fri UTC
+    during_work = datetime(2026, 11, 24, 14, 0, tzinfo=timezone.utc)
+    _, decisions_work = evaluate_and_route(msg, rules, at=during_work)
+    assert len(decisions_work) == 4
+    assert all(d.status == "routed" for d in decisions_work)
+
+    # Tuesday 03:00 UTC -> outside working hours
+    off_hours = datetime(2026, 11, 24, 3, 0, tzinfo=timezone.utc)
+    _, decisions_off = evaluate_and_route(msg, rules, at=off_hours)
+    assert decisions_off[0].channel == "email" and decisions_off[0].status == "routed"
+    assert decisions_off[1].channel == "sms" and decisions_off[1].status == "routed"
+    assert decisions_off[2].channel == "sms" and decisions_off[2].status == "suppressed"
+    assert decisions_off[3].channel == "sms" and decisions_off[3].status == "suppressed"
+
+    # Saturday 14:00 UTC -> weekend (outside working days)
+    weekend = datetime(2026, 11, 21, 14, 0, tzinfo=timezone.utc)
+    _, decisions_wknd = evaluate_and_route(msg, rules, at=weekend)
+    assert decisions_wknd[0].status == "routed"
+    assert decisions_wknd[1].status == "routed"
+    assert decisions_wknd[2].status == "suppressed"
+    assert decisions_wknd[3].status == "suppressed"
+
+
+def test_rules_evaluate_api_respects_at_timestamp(tmp_path: Path) -> None:
+    rules_path = tmp_path / "rules.json"
+    rules_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "r-sms",
+                    "name": "SMS Work Hours",
+                    "severity": "high",
+                    "notify": [
+                        {"channel": "email", "to": "team@example.com"},
+                        "sms_working_hours",
+                    ],
+                    "field": "/level",
+                    "operator": "eq",
+                    "value": "ERROR",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    broker = FakeBroker()
+    app = create_app(broker=broker, rules_file=str(rules_path))
+
+    with TestClient(app) as client:
+        wh_resp = client.get("/rules/working-hours")
+        assert wh_resp.status_code == 200
+        assert "description" in wh_resp.json()
+
+        work_resp = client.post(
+            "/rules/evaluate",
+            json={
+                "message": {"level": "ERROR"},
+                "at": "2026-11-24T14:00:00Z",
+            },
+        )
+        assert work_resp.status_code == 200
+        work_data = work_resp.json()
+        assert work_data["within_working_hours"] is True
+        assert [n["status"] for n in work_data["notifications"]] == ["routed", "routed"]
+
+        night_resp = client.post(
+            "/rules/evaluate",
+            json={
+                "message": {"level": "ERROR"},
+                "at": "2026-11-24T02:00:00Z",
+            },
+        )
+        assert night_resp.status_code == 200
+        night_data = night_resp.json()
+        assert night_data["within_working_hours"] is False
+        assert [n["status"] for n in night_data["notifications"]] == [
+            "routed",
+            "suppressed",
+        ]
+
+        bad_channel = client.put(
+            "/rules",
+            json=[
+                {
+                    "field": "/level",
+                    "operator": "eq",
+                    "value": "ERROR",
+                    "notify": ["carrier_pigeon"],
+                }
+            ],
+        )
+        assert bad_channel.status_code == 400
+

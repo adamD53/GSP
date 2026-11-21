@@ -63,6 +63,9 @@ function normalizeLog(rawObj: Partial<ParsedLog>, idPrefix: string): ParsedLogEn
     matched_rules: Array.isArray(rawObj.matched_rules)
       ? rawObj.matched_rules
       : [],
+    notifications: Array.isArray(rawObj.notifications)
+      ? rawObj.notifications
+      : [],
     alert: Boolean(
       rawObj.alert ||
         (Array.isArray(rawObj.matched_rules) && rawObj.matched_rules.length > 0)

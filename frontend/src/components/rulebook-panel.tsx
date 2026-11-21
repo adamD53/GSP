@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   CheckCircle2,
+  Clock,
   Code2,
+  Mail,
+  MessageSquare,
   Play,
   Plus,
   RefreshCw,
@@ -14,10 +17,23 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import type { RuleMatch, RuleSeverity, RulebookRule } from "@/lib/types";
+import type {
+  NotificationDecision,
+  NotifySpec,
+  RuleMatch,
+  RuleSeverity,
+  RulebookRule,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const SEVERITY_BADGE: Record<RuleSeverity, string> = {
@@ -28,6 +44,25 @@ const SEVERITY_BADGE: Record<RuleSeverity, string> = {
     "border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300 font-medium",
   low: "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300",
 };
+
+const TIME_PRESETS = [
+  { value: "now", label: "Current Time", iso: "" },
+  {
+    value: "work",
+    label: "Working Hours (Tue 14:00 UTC)",
+    iso: "2026-11-24T14:00:00Z",
+  },
+  {
+    value: "night",
+    label: "Off-Hours (Tue 03:00 UTC)",
+    iso: "2026-11-24T03:00:00Z",
+  },
+  {
+    value: "weekend",
+    label: "Weekend (Sat 14:00 UTC)",
+    iso: "2026-11-21T14:00:00Z",
+  },
+];
 
 const SAMPLE_TEST_MESSAGE = JSON.stringify(
   {
@@ -62,6 +97,31 @@ function summarizeCondition(rule: RulebookRule): string {
   return "Custom rule";
 }
 
+function normalizeNotifyList(
+  notify: RulebookRule["notify"]
+): { channel: "email" | "sms"; target?: string; workHoursOnly: boolean }[] {
+  if (!notify) return [];
+  const items: NotifySpec[] = Array.isArray(notify) ? notify : [notify];
+  return items.map((item) => {
+    if (typeof item === "string") {
+      if (item === "sms_working_hours") {
+        return { channel: "sms", workHoursOnly: true };
+      }
+      return {
+        channel: item === "email" ? "email" : "sms",
+        workHoursOnly: false,
+      };
+    }
+    const isWh =
+      item.channel === "sms_working_hours" || Boolean(item.working_hours_only);
+    return {
+      channel: item.channel === "email" ? "email" : "sms",
+      target: item.to,
+      workHoursOnly: isWh,
+    };
+  });
+}
+
 export function RulebookPanel() {
   const [rules, setRules] = useState<RulebookRule[]>([]);
   const [jsonText, setJsonText] = useState("[]");
@@ -74,10 +134,14 @@ export function RulebookPanel() {
   } | null>(null);
 
   const [testPayload, setTestPayload] = useState(SAMPLE_TEST_MESSAGE);
+  const [timePreset, setTimePreset] = useState("work");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{
     matched: boolean;
     matched_rules: RuleMatch[];
+    notifications: NotificationDecision[];
+    within_working_hours?: boolean;
+    working_hours?: string;
   } | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
 
@@ -88,7 +152,10 @@ export function RulebookPanel() {
       const res = await fetch("/api/rules", { cache: "no-store" });
       if (!res.ok) {
         const err = await res.text();
-        setStatusMsg({ kind: "error", text: `Load failed (${res.status}): ${err}` });
+        setStatusMsg({
+          kind: "error",
+          text: `Load failed (${res.status}): ${err}`,
+        });
         return;
       }
       const data = await res.json();
@@ -167,9 +234,14 @@ export function RulebookPanel() {
     const newRule: RulebookRule = {
       id: `custom-rule-${rules.length + 1}`,
       name: `Custom Rule ${rules.length + 1}`,
-      description: "Matches ERROR logs for a specific service",
+      description:
+        "Emails anytime; sends SMS only within working hours for checkout-api errors",
       severity: "high",
       enabled: true,
+      notify: [
+        { channel: "email", to: "oncall@example.com" },
+        { channel: "sms", to: "+15550001234", working_hours_only: true },
+      ],
       all: [
         { field: "/level", operator: "eq", value: "ERROR" },
         { field: "/service", operator: "eq", value: "checkout-api" },
@@ -199,6 +271,10 @@ export function RulebookPanel() {
     try {
       const parsedMsg = JSON.parse(testPayload);
       const body: Record<string, unknown> = { message: parsedMsg };
+      const preset = TIME_PRESETS.find((p) => p.value === timePreset);
+      if (preset?.iso) {
+        body.at = preset.iso;
+      }
       if (editMode) {
         body.rules = JSON.parse(jsonText);
       }
@@ -228,9 +304,7 @@ export function RulebookPanel() {
         <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/40 px-3 py-2">
           <div className="flex items-center gap-2">
             <ShieldAlert className="size-4 text-amber-500" />
-            <span className="text-xs font-semibold">
-              Rulebook (`rules.json`)
-            </span>
+            <span className="text-xs font-semibold">Rulebook (rules.json)</span>
             <Badge variant="secondary" className="font-mono text-[10px]">
               {rules.length}
             </Badge>
@@ -284,7 +358,7 @@ export function RulebookPanel() {
         )}
 
         {editMode ? (
-          <div className="flex flex-1 flex-col gap-2 p-3 overflow-hidden">
+          <div className="flex flex-1 flex-col gap-2 overflow-hidden p-3">
             <Textarea
               value={jsonText}
               onChange={(e) => setJsonText(e.target.value)}
@@ -293,7 +367,8 @@ export function RulebookPanel() {
             />
             <div className="flex items-center justify-between gap-2">
               <span className="text-[11px] text-muted-foreground">
-                Supports JSON Pointer paths (`/level`, `/metadata/latency_ms`), `all`, `any`, `not`, and operators `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `not_in`, `contains`, `regex`, `exists`.
+                Notify channels: email, sms, sms_working_hours (or object with
+                to + working_hours_only).
               </span>
               <Button
                 size="sm"
@@ -318,6 +393,7 @@ export function RulebookPanel() {
                 rules.map((rule, idx) => {
                   const sev = (rule.severity ?? "medium") as RuleSeverity;
                   const enabled = rule.enabled !== false;
+                  const routes = normalizeNotifyList(rule.notify);
                   return (
                     <div
                       key={rule.id ?? idx}
@@ -327,7 +403,7 @@ export function RulebookPanel() {
                       )}
                     >
                       <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0 space-y-1">
+                        <div className="min-w-0 space-y-1.5">
                           <div className="flex flex-wrap items-center gap-1.5">
                             <span className="text-sm font-medium text-foreground">
                               {rule.name || rule.id || `Rule ${idx + 1}`}
@@ -350,6 +426,35 @@ export function RulebookPanel() {
                           <p className="font-mono text-[11px] text-sky-600 dark:text-sky-400">
                             {summarizeCondition(rule)}
                           </p>
+                          {routes.length > 0 && (
+                            <div className="flex flex-wrap gap-1 pt-0.5">
+                              {routes.map((rt, rIdx) => (
+                                <Badge
+                                  key={`${rt.channel}-${rIdx}`}
+                                  variant="secondary"
+                                  className="gap-1 font-mono text-[10px]"
+                                >
+                                  {rt.channel === "email" ? (
+                                    <Mail className="size-2.5 text-sky-500" />
+                                  ) : (
+                                    <MessageSquare className="size-2.5 text-violet-500" />
+                                  )}
+                                  {rt.channel.toUpperCase()}
+                                  {rt.workHoursOnly && (
+                                    <span className="inline-flex items-center gap-0.5 text-amber-600 dark:text-amber-300">
+                                      <Clock className="size-2.5" />
+                                      work-hrs
+                                    </span>
+                                  )}
+                                  {rt.target && (
+                                    <span className="text-muted-foreground">
+                                      ({rt.target})
+                                    </span>
+                                  )}
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
                         </div>
 
                         <div className="flex shrink-0 items-center gap-2">
@@ -382,20 +487,39 @@ export function RulebookPanel() {
       </div>
 
       <div className="flex flex-col overflow-hidden rounded-lg border xl:col-span-5">
-        <div className="flex items-center justify-between border-b bg-muted/40 px-3 py-2">
-          <span className="text-xs font-semibold">Live Rule Tester</span>
-          <Button
-            size="xs"
-            onClick={() => void handleEvaluate()}
-            disabled={testing}
-            className="gap-1"
-          >
-            <Play className="size-3" />
-            {testing ? "Testing..." : "Evaluate"}
-          </Button>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/40 px-3 py-2">
+          <span className="text-xs font-semibold">Live Routing Tester</span>
+          <div className="flex items-center gap-1.5">
+            <Select
+              value={timePreset}
+              onValueChange={(val) => {
+                if (val) setTimePreset(val);
+              }}
+            >
+              <SelectTrigger size="sm" className="h-7 text-[11px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TIME_PRESETS.map((p) => (
+                  <SelectItem key={p.value} value={p.value}>
+                    {p.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              size="xs"
+              onClick={() => void handleEvaluate()}
+              disabled={testing}
+              className="gap-1"
+            >
+              <Play className="size-3" />
+              {testing ? "Testing..." : "Test"}
+            </Button>
+          </div>
         </div>
 
-        <div className="flex flex-1 flex-col gap-2.5 p-3 overflow-hidden">
+        <div className="flex flex-1 flex-col gap-2.5 overflow-hidden p-3">
           <Textarea
             value={testPayload}
             onChange={(e) => setTestPayload(e.target.value)}
@@ -405,55 +529,85 @@ export function RulebookPanel() {
 
           <Separator />
 
-          <div className="min-h-[84px] rounded-lg border bg-muted/30 p-2.5 text-xs">
+          <ScrollArea className="max-h-[175px] rounded-lg border bg-muted/30 p-2.5 text-xs">
             {testError ? (
               <p className="font-mono text-rose-600 dark:text-rose-400">
                 {testError}
               </p>
             ) : testResult ? (
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-1.5 font-medium">
-                  {testResult.matched ? (
-                    <>
-                      <ShieldAlert className="size-4 text-rose-500" />
-                      <span className="text-rose-600 dark:text-rose-300">
-                        Matched {testResult.matched_rules.length} rule
-                        {testResult.matched_rules.length === 1 ? "" : "s"}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="size-4 text-emerald-500" />
-                      <span className="text-emerald-600 dark:text-emerald-300">
-                        No rules triggered
-                      </span>
-                    </>
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-1 font-medium">
+                  <div className="flex items-center gap-1.5">
+                    {testResult.matched ? (
+                      <>
+                        <ShieldAlert className="size-4 text-rose-500" />
+                        <span className="text-rose-600 dark:text-rose-300">
+                          Matched {testResult.matched_rules.length} rule
+                          {testResult.matched_rules.length === 1 ? "" : "s"}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="size-4 text-emerald-500" />
+                        <span className="text-emerald-600 dark:text-emerald-300">
+                          No rules triggered
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  {typeof testResult.within_working_hours === "boolean" && (
+                    <Badge
+                      variant="outline"
+                      className="gap-1 font-mono text-[10px]"
+                    >
+                      <Clock className="size-2.5" />
+                      {testResult.within_working_hours
+                        ? "Working Hours"
+                        : "Off-Hours"}
+                    </Badge>
                   )}
                 </div>
-                {testResult.matched_rules.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {testResult.matched_rules.map((m) => (
-                      <Badge
-                        key={m.id}
-                        variant="outline"
-                        className={cn(
-                          "font-mono text-[10px]",
-                          SEVERITY_BADGE[m.severity] ?? SEVERITY_BADGE.medium
-                        )}
-                      >
-                        {m.name} ({m.severity})
-                      </Badge>
-                    ))}
-                  </div>
-                )}
+
+                {testResult.notifications &&
+                  testResult.notifications.length > 0 && (
+                    <div className="space-y-1">
+                      {testResult.notifications.map((n, idx) => (
+                        <div
+                          key={`${n.rule_id}-${n.channel}-${idx}`}
+                          className="flex items-center justify-between gap-2 rounded border bg-card px-2 py-1"
+                        >
+                          <div className="min-w-0 truncate">
+                            <span className="font-mono font-semibold uppercase">
+                              {n.channel}
+                            </span>{" "}
+                            <span className="font-mono text-muted-foreground">
+                              → {n.target}
+                            </span>
+                          </div>
+                          <Badge
+                            variant={
+                              n.status === "suppressed" ? "secondary" : "outline"
+                            }
+                            className={
+                              n.status === "routed" || n.status === "sent"
+                                ? "border-emerald-500/35 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-mono text-[10px] uppercase shrink-0"
+                                : "border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300 font-mono text-[10px] uppercase shrink-0"
+                            }
+                          >
+                            {n.status}
+                          </Badge>
+                        </div>
+                      ))}
+                    </div>
+                  )}
               </div>
             ) : (
               <p className="text-muted-foreground">
-                Click &ldquo;Evaluate&rdquo; to test this JSON message against{" "}
-                {editMode ? "your unsaved JSON draft" : "the active rulebook"}.
+                Select Working Hours vs Off-Hours and click &ldquo;Test&rdquo;
+                to preview email &amp; SMS routing decisions.
               </p>
             )}
-          </div>
+          </ScrollArea>
         </div>
       </div>
     </div>

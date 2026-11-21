@@ -4,6 +4,24 @@ from pydantic import BaseModel, Field
 
 LogLevel = Literal["DEBUG", "INFO", "WARN", "ERROR", "FATAL", "UNKNOWN"]
 RuleSeverity = Literal["critical", "high", "medium", "low"]
+NotificationChannel = Literal["email", "sms"]
+NotificationStatus = Literal["sent", "routed", "suppressed", "failed"]
+
+
+class NotificationDecision(BaseModel):
+    rule_id: str = Field(description="Rule that triggered this notification.")
+    rule_name: str = Field(description="Human-readable rule name.")
+    severity: RuleSeverity = Field(default="medium")
+    channel: NotificationChannel = Field(description="Delivery channel: email or sms.")
+    target: str = Field(description="Recipient email address or phone number.")
+    working_hours_only: bool = Field(
+        default=False,
+        description="Whether this route is restricted to working hours.",
+    )
+    status: NotificationStatus = Field(
+        description="sent (live provider), routed (simulated), suppressed (off-hours), or failed."
+    )
+    reason: str = Field(description="Human-readable routing decision explanation.")
 
 
 class RuleMatch(BaseModel):
@@ -42,6 +60,10 @@ class ParsedLog(LLMExtractedLog):
     matched_rules: list[RuleMatch] = Field(
         default_factory=list,
         description="Rulebook rules matched against this parsed log.",
+    )
+    notifications: list[NotificationDecision] = Field(
+        default_factory=list,
+        description="Resolved notification routes (email, sms, working-hours suppression).",
     )
     alert: bool = Field(
         default=False,

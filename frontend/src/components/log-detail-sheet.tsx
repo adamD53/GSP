@@ -1,7 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Copy, ShieldAlert, Sparkles } from "lucide-react";
+import {
+  Check,
+  Clock,
+  Copy,
+  Mail,
+  MessageSquare,
+  ShieldAlert,
+  Sparkles,
+} from "lucide-react";
 import { SeverityBadge } from "@/components/severity-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -97,6 +105,64 @@ export function LogDetailSheet({ log, onClose }: LogDetailSheetProps) {
                           >
                             {rule.name} ({rule.severity})
                           </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {log.notifications && log.notifications.length > 0 && (
+                    <div className="space-y-1.5">
+                      <h4 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                        Notification Routing ({log.notifications.length})
+                      </h4>
+                      <div className="space-y-1.5">
+                        {log.notifications.map((notif, idx) => (
+                          <div
+                            key={`${notif.rule_id}-${notif.channel}-${idx}`}
+                            className="flex items-start justify-between gap-2 rounded-lg border bg-card px-3 py-2 text-xs"
+                          >
+                            <div className="min-w-0 space-y-0.5">
+                              <div className="flex items-center gap-1.5 font-medium">
+                                {notif.channel === "email" ? (
+                                  <Mail className="size-3.5 text-sky-500" />
+                                ) : (
+                                  <MessageSquare className="size-3.5 text-violet-500" />
+                                )}
+                                <span className="uppercase">{notif.channel}</span>
+                                <span className="font-mono text-muted-foreground">
+                                  → {notif.target}
+                                </span>
+                                {notif.working_hours_only && (
+                                  <Badge
+                                    variant="outline"
+                                    className="gap-1 font-mono text-[10px]"
+                                  >
+                                    <Clock className="size-2.5" />
+                                    Work Hours
+                                  </Badge>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-muted-foreground">
+                                {notif.reason}
+                              </p>
+                            </div>
+                            <Badge
+                              variant={
+                                notif.status === "suppressed"
+                                  ? "secondary"
+                                  : notif.status === "failed"
+                                    ? "destructive"
+                                    : "outline"
+                              }
+                              className={
+                                notif.status === "routed" || notif.status === "sent"
+                                  ? "border-emerald-500/35 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-mono text-[10px] uppercase"
+                                  : "font-mono text-[10px] uppercase"
+                              }
+                            >
+                              {notif.status}
+                            </Badge>
+                          </div>
                         ))}
                       </div>
                     </div>

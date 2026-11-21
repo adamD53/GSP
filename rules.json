@@ -2,9 +2,13 @@
   {
     "id": "fatal-or-critical",
     "name": "Fatal Severity Log",
-    "description": "Triggers on any FATAL log event across all services.",
+    "description": "Triggers 24/7 email and SMS alerts on any FATAL log event.",
     "severity": "critical",
     "enabled": true,
+    "notify": [
+      { "channel": "email", "to": "oncall@example.com" },
+      { "channel": "sms", "to": "+15550001234", "working_hours_only": false }
+    ],
     "field": "/level",
     "operator": "eq",
     "value": "FATAL"
@@ -12,9 +16,13 @@
   {
     "id": "high-latency-error",
     "name": "High-Latency Error",
-    "description": "Triggers when an ERROR or FATAL log reports latency_ms above 3000ms.",
+    "description": "Emails anytime; sends SMS only during working hours when ERROR/FATAL latency > 3000ms.",
     "severity": "high",
     "enabled": true,
+    "notify": [
+      { "channel": "email", "to": "backend-alerts@example.com" },
+      { "channel": "sms", "to": "+15550001234", "working_hours_only": true }
+    ],
     "all": [
       {
         "field": "/level",
@@ -31,9 +39,10 @@
   {
     "id": "auth-or-db-failure",
     "name": "Auth or Database Failure",
-    "description": "Triggers on failed authentication or database timeout messages.",
+    "description": "Emails anytime; SMS only during working hours on auth or DB timeout.",
     "severity": "high",
     "enabled": true,
+    "notify": ["email", "sms_working_hours"],
     "any": [
       {
         "field": "/message",
@@ -50,9 +59,12 @@
   {
     "id": "low-stock-warning",
     "name": "Low Inventory Threshold",
-    "description": "Triggers when inventory-sync reports remaining stock <= 5.",
+    "description": "Sends email alert when inventory-sync reports remaining stock <= 5.",
     "severity": "medium",
     "enabled": true,
+    "notify": [
+      { "channel": "email", "to": "ops-inventory@example.com" }
+    ],
     "all": [
       {
         "field": "/service",

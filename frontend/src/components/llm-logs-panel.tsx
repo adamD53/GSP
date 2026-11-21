@@ -3,7 +3,10 @@
 import { useMemo, useState } from "react";
 import {
   AlertOctagon,
+  Clock,
   FileText,
+  Mail,
+  MessageSquare,
   Search,
   ShieldAlert,
   Sparkles,
@@ -320,6 +323,31 @@ export function LLMLogsPanel({
                                       >
                                         <ShieldAlert className="size-2.5" />
                                         {rule.name}
+                                      </Badge>
+                                    ))}
+                                  {entry.notifications &&
+                                    entry.notifications.map((notif, nIdx) => (
+                                      <Badge
+                                        key={`${notif.rule_id}-${notif.channel}-${nIdx}`}
+                                        variant="outline"
+                                        className={
+                                          notif.status === "suppressed"
+                                            ? "gap-1 border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300 font-mono text-[10px]"
+                                            : "gap-1 border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-mono text-[10px]"
+                                        }
+                                      >
+                                        {notif.channel === "email" ? (
+                                          <Mail className="size-2.5" />
+                                        ) : (
+                                          <MessageSquare className="size-2.5" />
+                                        )}
+                                        {notif.channel.toUpperCase()}
+                                        {notif.status === "suppressed" && (
+                                          <>
+                                            <Clock className="size-2.5" />
+                                            off-hours
+                                          </>
+                                        )}
                                       </Badge>
                                     ))}
                                 </div>

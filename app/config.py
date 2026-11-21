@@ -14,5 +14,17 @@ class Settings(BaseSettings):
     startup_retry_delay: float = 1.5
     rules_file: str = "rules.json"
 
+    # Notification routing & working-hours defaults
+    working_hours_start: str = "09:00"
+    working_hours_end: str = "17:00"
+    working_days: str = "0,1,2,3,4"  # 0=Mon .. 6=Sun
+    working_hours_timezone: str = "UTC"
+    default_alert_email: str = "oncall@example.com"
+    default_alert_sms: str = "+15550001234"
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_from: str = "alerts@gsp.local"
+    sms_webhook_url: str | None = None
+
 
 settings = Settings()

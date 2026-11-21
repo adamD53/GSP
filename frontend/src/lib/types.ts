@@ -10,6 +10,35 @@ export const LOG_LEVELS: LogLevel[] = [
 ];
 
 export type RuleSeverity = "critical" | "high" | "medium" | "low";
+export type NotificationChannel = "email" | "sms";
+export type NotificationStatus = "sent" | "routed" | "suppressed" | "failed";
+
+export interface NotificationDecision {
+  rule_id: string;
+  rule_name: string;
+  severity: RuleSeverity;
+  channel: NotificationChannel;
+  target: string;
+  working_hours_only: boolean;
+  status: NotificationStatus;
+  reason: string;
+}
+
+export type NotifySpec =
+  | "email"
+  | "sms"
+  | "sms_working_hours"
+  | {
+      channel: "email" | "sms" | "sms_working_hours";
+      to?: string;
+      working_hours_only?: boolean;
+      working_hours?: {
+        start?: string;
+        end?: string;
+        days?: number[];
+        timezone?: string;
+      };
+    };
 
 export interface RuleMatch {
   id: string;
@@ -23,6 +52,7 @@ export interface RulebookRule {
   description?: string;
   severity?: RuleSeverity;
   enabled?: boolean;
+  notify?: NotifySpec | NotifySpec[];
   field?: string;
   operator?: string;
   value?: unknown;
@@ -41,6 +71,7 @@ export interface ParsedLog {
   metadata: Record<string, unknown>;
   raw: string;
   matched_rules?: RuleMatch[];
+  notifications?: NotificationDecision[];
   alert?: boolean;
 }
 

@@ -1,5 +1,6 @@
 import json
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
@@ -7,7 +8,13 @@ from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from app.config import settings
 from app.kafka_client import LogBroker
-from app.rules import evaluate_message, load_rules, save_rules, validate_rules
+from app.notifications import get_default_working_hours, is_within_working_hours
+from app.rules import (
+    evaluate_and_route,
+    load_rules,
+    save_rules,
+    validate_rules,
+)
 
 
 def _parse_json_lines(raw_text: str) -> list[dict[str, Any]]:
@@ -151,6 +158,22 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse(saved)
 
+    @app.get("/rules/working-hours", response_class=JSONResponse)
+    async def get_working_hours() -> JSONResponse:
+        wh = get_default_working_hours()
+        now = datetime.now(timezone.utc)
+        return JSONResponse(
+            {
+                "start": wh.start.strftime("%H:%M"),
+                "end": wh.end.strftime("%H:%M"),
+                "days": list(wh.days),
+                "timezone": wh.tz_name,
+                "description": wh.describe(),
+                "within_working_hours": is_within_working_hours(at=now, config=wh),
+                "now": now.isoformat(),
+            }
+        )
+
     @app.post("/rules/evaluate", response_class=JSONResponse)
     async def evaluate_rules_endpoint(payload: dict[str, Any] = Body(...)) -> JSONResponse:
         message = payload.get("message")
@@ -160,19 +183,36 @@ def create_app(
                 detail="Request body must include a 'message' JSON object.",
             )
         override_rules = payload.get("rules")
+        raw_at = payload.get("at")
+        eval_time = datetime.now(timezone.utc)
+        if isinstance(raw_at, str) and raw_at.strip():
+            try:
+                eval_time = datetime.fromisoformat(raw_at.strip().replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid ISO timestamp for 'at': {raw_at}",
+                ) from exc
+
         try:
             rules = (
                 validate_rules(override_rules)
                 if override_rules is not None
                 else load_rules(active_rules_file)
             )
-            matches = evaluate_message(message, rules)
+            matches, decisions = evaluate_and_route(message, rules, at=eval_time)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        wh = get_default_working_hours()
         return JSONResponse(
             {
                 "matched": len(matches) > 0,
                 "matched_rules": [m.model_dump() for m in matches],
+                "notifications": [d.model_dump() for d in decisions],
+                "evaluated_at": eval_time.isoformat(),
+                "within_working_hours": is_within_working_hours(at=eval_time, config=wh),
+                "working_hours": wh.describe(),
             }
         )
 

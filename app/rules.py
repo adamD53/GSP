@@ -1,10 +1,16 @@
 import json
 import operator
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from app.schemas import RuleMatch, RuleSeverity
+from app.notifications import (
+    WorkingHoursConfig,
+    normalize_notify_spec,
+    resolve_notifications_for_rules,
+)
+from app.schemas import NotificationDecision, RuleMatch, RuleSeverity
 
 _MISSING = object()
 _NUMERIC_OPS = {"gt", "gte", "lt", "lte"}
@@ -149,6 +155,11 @@ def validate_rules(rules: Any) -> list[dict[str, Any]]:
                 f"Invalid severity '{severity}' at rule index {idx}; "
                 f"expected one of {sorted(_VALID_SEVERITIES)}"
             )
+        if "notify" in rule and rule["notify"] is not None:
+            raw_notify = rule["notify"]
+            notify_items = raw_notify if isinstance(raw_notify, list) else [raw_notify]
+            for item in notify_items:
+                normalize_notify_spec(item)
         validate_condition(_unwrap_condition(rule))
 
     return rule_list
@@ -253,6 +264,54 @@ def save_rules(
     cache_key = str(path.resolve())
     _RULES_CACHE[cache_key] = (path.stat().st_mtime, normalized)
     return normalized
+
+
+def evaluate_and_route(
+    message: dict[str, Any],
+    rules: dict[str, Any] | list[dict[str, Any]],
+    at: datetime | None = None,
+    working_hours: WorkingHoursConfig | None = None,
+) -> tuple[list[RuleMatch], list[NotificationDecision]]:
+    """Evaluate rules and resolve notification routing decisions for matches."""
+    rule_list = [rules] if isinstance(rules, dict) else list(rules)
+    matched: list[RuleMatch] = []
+    matched_raw_rules: list[dict[str, Any]] = []
+
+    for idx, rule in enumerate(rule_list):
+        if rule.get("enabled", True) is False:
+            continue
+        cond = _unwrap_condition(rule)
+        if matches_condition(message, cond):
+            severity = rule.get("severity", "medium")
+            if severity not in _VALID_SEVERITIES:
+                severity = "medium"
+            matched.append(
+                RuleMatch(
+                    id=str(rule.get("id") or f"rule-{idx + 1}"),
+                    name=str(rule.get("name") or f"Rule {idx + 1}"),
+                    severity=severity,  # type: ignore[arg-type]
+                )
+            )
+            matched_raw_rules.append(rule)
+
+    decisions = resolve_notifications_for_rules(
+        matched_raw_rules,
+        at=at,
+        working_hours=working_hours,
+    )
+    return matched, decisions
+
+
+def evaluate_and_route_file(
+    message: dict[str, Any],
+    rules_file: str | Path = "rules.json",
+    at: datetime | None = None,
+    working_hours: WorkingHoursConfig | None = None,
+) -> tuple[list[RuleMatch], list[NotificationDecision]]:
+    rules = load_rules(rules_file)
+    if not rules:
+        return [], []
+    return evaluate_and_route(message, rules, at=at, working_hours=working_hours)
 
 
 def evaluate_message_file(
