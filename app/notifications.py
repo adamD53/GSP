@@ -1,15 +1,20 @@
+import asyncio
+import json
 import logging
 import smtplib
 from dataclasses import dataclass
 from datetime import datetime, time, timezone
 from email.message import EmailMessage
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
 from app.config import settings
 from app.schemas import NotificationChannel, NotificationDecision, RuleSeverity
+
+if TYPE_CHECKING:
+    from app.alerts import AlertStore
 
 logger = logging.getLogger("log_notifications")
 
@@ -224,6 +229,11 @@ def resolve_notifications_for_rules(
     return decisions
 
 
+def _send_smtp_sync(host: str, port: int, msg: EmailMessage) -> None:
+    with smtplib.SMTP(host, port, timeout=5) as s:
+        s.send_message(msg)
+
+
 async def dispatch_notifications(
     decisions: list[NotificationDecision],
     log_summary: str,
@@ -248,8 +258,9 @@ async def dispatch_notifications(
                     f"Service: {service or 'unknown'}\n"
                     f"Summary: {log_summary}\n"
                 )
-                with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=5) as s:
-                    s.send_message(msg)
+                await asyncio.to_thread(
+                    _send_smtp_sync, settings.smtp_host, settings.smtp_port, msg
+                )
                 results.append(
                     decision.model_copy(
                         update={"status": "sent", "reason": f"Sent via SMTP to {decision.target}"}
@@ -303,3 +314,87 @@ async def dispatch_notifications(
         results.append(decision)
 
     return results
+
+
+async def process_outbox_once(
+    alert_store: "AlertStore",
+    broker: Any | None = None,
+    dead_letter_topic: str | None = None,
+    base_delay_seconds: float | None = None,
+    max_delay_seconds: float | None = None,
+    limit: int = 25,
+    at: datetime | None = None,
+) -> dict[str, int]:
+    """Process due notification outbox items with exponential backoff and DLQ."""
+    due = alert_store.claim_due_outbox(limit=limit, at=at)
+    stats = {"processed": 0, "sent": 0, "retried": 0, "dead_lettered": 0}
+    dlq_topic = dead_letter_topic or settings.notification_dead_letter_topic
+
+    for rec in due:
+        stats["processed"] += 1
+        decision = NotificationDecision(
+            rule_id=rec.rule_id,
+            rule_name=rec.rule_name,
+            severity=rec.severity,
+            channel=rec.channel,
+            target=rec.target,
+            working_hours_only=rec.working_hours_only,
+            status="routed",
+            reason=f"Outbox retry attempt #{rec.attempts + 1}",
+        )
+        dispatched = await dispatch_notifications(
+            [decision],
+            log_summary=rec.log_summary,
+            service=rec.service,
+        )
+        result = dispatched[0]
+
+        if result.status in ("sent", "routed"):
+            alert_store.mark_outbox_sent(rec.id, result.reason, at=at)
+            stats["sent"] += 1
+            logger.info(
+                "Outbox %s delivered on attempt #%d (%s -> %s)",
+                rec.id,
+                rec.attempts + 1,
+                rec.channel,
+                rec.target,
+            )
+            continue
+
+        updated, dead_lettered = alert_store.mark_outbox_retry_or_dlq(
+            rec.id,
+            error=result.reason,
+            base_delay_seconds=base_delay_seconds,
+            max_delay_seconds=max_delay_seconds,
+            at=at,
+        )
+        if dead_lettered:
+            stats["dead_lettered"] += 1
+            logger.error(
+                "Outbox %s exhausted %d attempts -> dead_letter (%s)",
+                rec.id,
+                rec.max_attempts,
+                result.reason,
+            )
+            if broker is not None and updated is not None:
+                try:
+                    payload = json.dumps(updated.model_dump()).encode("utf-8")
+                    await broker.send_raw(payload, topic=dlq_topic)
+                except Exception as dlq_exc:
+                    logger.warning(
+                        "Failed to publish outbox %s to Kafka DLQ '%s': %s",
+                        rec.id,
+                        dlq_topic,
+                        dlq_exc,
+                    )
+        else:
+            stats["retried"] += 1
+            logger.warning(
+                "Outbox %s attempt #%d failed (%s); next retry at %s",
+                rec.id,
+                updated.attempts if updated else rec.attempts + 1,
+                result.reason,
+                updated.next_retry_at if updated else "unknown",
+            )
+
+    return stats

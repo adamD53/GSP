@@ -33,5 +33,12 @@ class Settings(BaseSettings):
     smtp_from: str = "alerts@gsp.local"
     sms_webhook_url: str | None = None
 
+    # Notification outbox retry & DLQ settings
+    notification_max_attempts: int = 5
+    notification_retry_base_seconds: float = 5.0
+    notification_retry_max_seconds: float = 300.0
+    notification_retry_poll_seconds: float = 2.0
+    notification_dead_letter_topic: str = "notification-dead-letter"
+
 
 settings = Settings()

@@ -6,6 +6,7 @@ LogLevel = Literal["DEBUG", "INFO", "WARN", "ERROR", "FATAL", "UNKNOWN"]
 RuleSeverity = Literal["critical", "high", "medium", "low"]
 NotificationChannel = Literal["email", "sms"]
 NotificationStatus = Literal["sent", "routed", "suppressed", "failed"]
+OutboxStatus = Literal["pending", "sent", "dead_letter"]
 AlertStatus = Literal["open", "acked", "resolved"]
 RunbookFormat = Literal["yaml", "markdown", "text"]
 ApprovalMode = Literal["none", "required"]
@@ -107,6 +108,26 @@ class NotificationDecision(BaseModel):
         description="sent (live provider), routed (simulated), suppressed (off-hours), or failed."
     )
     reason: str = Field(description="Human-readable routing decision explanation.")
+
+
+class OutboxRecord(BaseModel):
+    id: str
+    alert_id: str
+    rule_id: str
+    rule_name: str
+    severity: RuleSeverity = "medium"
+    channel: NotificationChannel
+    target: str
+    service: str | None = None
+    log_summary: str
+    working_hours_only: bool = False
+    status: OutboxStatus = "pending"
+    attempts: int = 0
+    max_attempts: int = 5
+    next_retry_at: str
+    last_error: str | None = None
+    created_at: str
+    updated_at: str
 
 
 class RuleMatch(BaseModel):

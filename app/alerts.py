@@ -14,6 +14,8 @@ from app.schemas import (
     AlertRecord,
     AlertStatus,
     NotificationDecision,
+    OutboxRecord,
+    OutboxStatus,
     ParsedLog,
     RuleMatch,
     StepExecutionRecord,
@@ -123,6 +125,35 @@ class AlertStore:
                 """
                 CREATE INDEX IF NOT EXISTS idx_alerts_fp_status
                 ON alerts (fingerprint, status, last_seen);
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS notification_outbox (
+                    id TEXT PRIMARY KEY,
+                    alert_id TEXT NOT NULL,
+                    rule_id TEXT NOT NULL,
+                    rule_name TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    channel TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    service TEXT,
+                    log_summary TEXT NOT NULL,
+                    working_hours_only INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    max_attempts INTEGER NOT NULL DEFAULT 5,
+                    next_retry_at TEXT NOT NULL,
+                    last_error TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_outbox_status_retry
+                ON notification_outbox (status, next_retry_at);
                 """
             )
 
@@ -448,3 +479,286 @@ class AlertStore:
                 "SELECT * FROM alerts WHERE id = ?", (alert_id,)
             ).fetchone()
             return self._row_to_record(updated)
+
+    # ------------------------------------------------------------------
+    # Durable notification outbox (retry with exponential backoff + DLQ)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _row_to_outbox(row: sqlite3.Row) -> OutboxRecord:
+        return OutboxRecord(
+            id=row["id"],
+            alert_id=row["alert_id"],
+            rule_id=row["rule_id"],
+            rule_name=row["rule_name"],
+            severity=row["severity"],
+            channel=row["channel"],
+            target=row["target"],
+            service=row["service"],
+            log_summary=row["log_summary"],
+            working_hours_only=bool(row["working_hours_only"]),
+            status=row["status"],
+            attempts=int(row["attempts"]),
+            max_attempts=int(row["max_attempts"]),
+            next_retry_at=row["next_retry_at"],
+            last_error=row["last_error"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    def enqueue_failed_notifications(
+        self,
+        alert_id: str,
+        decisions: list[NotificationDecision],
+        log_summary: str,
+        service: str | None = None,
+        max_attempts: int | None = None,
+        base_delay_seconds: float | None = None,
+        at: datetime | None = None,
+    ) -> list[OutboxRecord]:
+        """Persist failed notification deliveries to the outbox for backoff retries."""
+        failed = [d for d in decisions if d.status == "failed"]
+        if not failed:
+            return []
+
+        now_dt = at or datetime.now(timezone.utc)
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.replace(tzinfo=timezone.utc)
+        now_iso = _utcnow_iso(now_dt)
+
+        effective_max = (
+            max_attempts if max_attempts is not None else settings.notification_max_attempts
+        )
+        effective_delay = (
+            base_delay_seconds
+            if base_delay_seconds is not None
+            else settings.notification_retry_base_seconds
+        )
+        next_retry_iso = _utcnow_iso(now_dt + timedelta(seconds=max(0.0, effective_delay)))
+        initial_status: OutboxStatus = "dead_letter" if effective_max <= 1 else "pending"
+
+        created_records: list[OutboxRecord] = []
+        with self._connect() as conn:
+            for decision in failed:
+                outbox_id = f"out_{uuid.uuid4().hex[:10]}"
+                conn.execute(
+                    """
+                    INSERT INTO notification_outbox (
+                        id, alert_id, rule_id, rule_name, severity, channel, target,
+                        service, log_summary, working_hours_only, status, attempts,
+                        max_attempts, next_retry_at, last_error, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        outbox_id,
+                        alert_id,
+                        decision.rule_id,
+                        decision.rule_name,
+                        decision.severity,
+                        decision.channel,
+                        decision.target,
+                        service,
+                        log_summary,
+                        1 if decision.working_hours_only else 0,
+                        initial_status,
+                        effective_max,
+                        next_retry_iso,
+                        decision.reason,
+                        now_iso,
+                        now_iso,
+                    ),
+                )
+                row = conn.execute(
+                    "SELECT * FROM notification_outbox WHERE id = ?", (outbox_id,)
+                ).fetchone()
+                if row is not None:
+                    created_records.append(self._row_to_outbox(row))
+        return created_records
+
+    def claim_due_outbox(
+        self,
+        limit: int = 25,
+        at: datetime | None = None,
+    ) -> list[OutboxRecord]:
+        """Return pending outbox items whose `next_retry_at` is due."""
+        now_iso = _utcnow_iso(at)
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM notification_outbox
+                WHERE status = 'pending' AND next_retry_at <= ?
+                ORDER BY next_retry_at ASC
+                LIMIT ?
+                """,
+                (now_iso, limit),
+            ).fetchall()
+        return [self._row_to_outbox(r) for r in rows]
+
+    def mark_outbox_sent(
+        self,
+        outbox_id: str,
+        reason: str,
+        at: datetime | None = None,
+    ) -> OutboxRecord | None:
+        """Mark an outbox item sent and update the parent alert's notification status."""
+        now_iso = _utcnow_iso(at)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM notification_outbox WHERE id = ?", (outbox_id,)
+            ).fetchone()
+            if row is None:
+                return None
+
+            conn.execute(
+                """
+                UPDATE notification_outbox
+                SET status = 'sent', attempts = attempts + 1, last_error = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                (now_iso, outbox_id),
+            )
+
+            alert_row = conn.execute(
+                "SELECT notifications_json FROM alerts WHERE id = ?",
+                (row["alert_id"],),
+            ).fetchone()
+            if alert_row is not None:
+                notifs = json.loads(alert_row["notifications_json"] or "[]")
+                changed = False
+                for item in notifs:
+                    if (
+                        item.get("rule_id") == row["rule_id"]
+                        and item.get("channel") == row["channel"]
+                        and item.get("target") == row["target"]
+                        and item.get("status") == "failed"
+                    ):
+                        item["status"] = "sent"
+                        item["reason"] = f"{reason} (after retry)"
+                        changed = True
+                if changed:
+                    conn.execute(
+                        "UPDATE alerts SET notifications_json = ? WHERE id = ?",
+                        (json.dumps(notifs), row["alert_id"]),
+                    )
+
+            updated = conn.execute(
+                "SELECT * FROM notification_outbox WHERE id = ?", (outbox_id,)
+            ).fetchone()
+            return self._row_to_outbox(updated) if updated else None
+
+    def mark_outbox_retry_or_dlq(
+        self,
+        outbox_id: str,
+        error: str,
+        base_delay_seconds: float | None = None,
+        max_delay_seconds: float | None = None,
+        at: datetime | None = None,
+    ) -> tuple[OutboxRecord | None, bool]:
+        """Record a failed retry attempt; schedule exponential backoff or move to DLQ.
+
+        Returns `(record, dead_lettered)`.
+        """
+        now_dt = at or datetime.now(timezone.utc)
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.replace(tzinfo=timezone.utc)
+        now_iso = _utcnow_iso(now_dt)
+
+        base = (
+            base_delay_seconds
+            if base_delay_seconds is not None
+            else settings.notification_retry_base_seconds
+        )
+        max_delay = (
+            max_delay_seconds
+            if max_delay_seconds is not None
+            else settings.notification_retry_max_seconds
+        )
+
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM notification_outbox WHERE id = ?", (outbox_id,)
+            ).fetchone()
+            if row is None:
+                return None, False
+
+            next_attempts = int(row["attempts"]) + 1
+            max_attempts = int(row["max_attempts"])
+
+            if next_attempts >= max_attempts:
+                conn.execute(
+                    """
+                    UPDATE notification_outbox
+                    SET status = 'dead_letter', attempts = ?, last_error = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (next_attempts, error, now_iso, outbox_id),
+                )
+                updated = conn.execute(
+                    "SELECT * FROM notification_outbox WHERE id = ?", (outbox_id,)
+                ).fetchone()
+                return (self._row_to_outbox(updated) if updated else None), True
+
+            # Exponential backoff: base * 2^(attempts - 1), capped at max_delay
+            delay = min(max_delay, max(0.0, base) * (2 ** max(0, next_attempts - 1)))
+            next_retry_iso = _utcnow_iso(now_dt + timedelta(seconds=delay))
+            conn.execute(
+                """
+                UPDATE notification_outbox
+                SET status = 'pending', attempts = ?, next_retry_at = ?, last_error = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (next_attempts, next_retry_iso, error, now_iso, outbox_id),
+            )
+            updated = conn.execute(
+                "SELECT * FROM notification_outbox WHERE id = ?", (outbox_id,)
+            ).fetchone()
+            return (self._row_to_outbox(updated) if updated else None), False
+
+    def list_outbox(
+        self,
+        status: OutboxStatus | None = None,
+        alert_id: str | None = None,
+        limit: int = 100,
+    ) -> list[OutboxRecord]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if alert_id:
+            clauses.append("alert_id = ?")
+            params.append(alert_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM notification_outbox {where} ORDER BY updated_at DESC LIMIT ?",
+                params,
+            ).fetchall()
+        return [self._row_to_outbox(r) for r in rows]
+
+    def requeue_outbox(
+        self,
+        outbox_id: str,
+        at: datetime | None = None,
+    ) -> OutboxRecord | None:
+        """Reset a dead-lettered or pending outbox item for immediate retry."""
+        now_iso = _utcnow_iso(at)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM notification_outbox WHERE id = ?", (outbox_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                """
+                UPDATE notification_outbox
+                SET status = 'pending', attempts = 0, next_retry_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (now_iso, now_iso, outbox_id),
+            )
+            updated = conn.execute(
+                "SELECT * FROM notification_outbox WHERE id = ?", (outbox_id,)
+            ).fetchone()
+            return self._row_to_outbox(updated) if updated else None

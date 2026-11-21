@@ -9,7 +9,11 @@ from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from app.alerts import AlertStore
 from app.config import settings
 from app.kafka_client import LogBroker
-from app.notifications import get_default_working_hours, is_within_working_hours
+from app.notifications import (
+    get_default_working_hours,
+    is_within_working_hours,
+    process_outbox_once,
+)
 from app.parser import prepare_rule_eval_target
 from app.rules import (
     evaluate_and_route,
@@ -23,7 +27,7 @@ from app.runbooks import (
     resolve_runbook_for_alert,
     save_runbooks,
 )
-from app.schemas import AlertRecord, AlertStatus, RunbookDefinition
+from app.schemas import AlertRecord, AlertStatus, OutboxStatus, RunbookDefinition
 
 
 def _parse_json_lines(raw_text: str) -> list[dict[str, Any]]:
@@ -390,6 +394,35 @@ def create_app(
             raise HTTPException(status_code=404, detail="Runbook not found")
         saved = save_runbooks(next_list, active_runbooks_file)
         return JSONResponse([rb.model_dump() for rb in saved])
+
+    @app.get("/notifications/outbox", response_class=JSONResponse)
+    async def list_outbox_endpoint(
+        status: OutboxStatus | None = Query(default=None),
+        alert_id: str | None = Query(default=None),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> JSONResponse:
+        items = active_alert_store.list_outbox(
+            status=status,
+            alert_id=alert_id,
+            limit=limit,
+        )
+        return JSONResponse([item.model_dump() for item in items])
+
+    @app.post("/notifications/outbox/process", response_class=JSONResponse)
+    async def process_outbox_endpoint(request: Request) -> JSONResponse:
+        stats = await process_outbox_once(
+            alert_store=active_alert_store,
+            broker=request.app.state.broker,
+            dead_letter_topic=settings.notification_dead_letter_topic,
+        )
+        return JSONResponse(stats)
+
+    @app.post("/notifications/outbox/{outbox_id}/retry", response_class=JSONResponse)
+    async def requeue_outbox_endpoint(outbox_id: str) -> JSONResponse:
+        requeued = active_alert_store.requeue_outbox(outbox_id)
+        if requeued is None:
+            raise HTTPException(status_code=404, detail="Outbox record not found")
+        return JSONResponse(requeued.model_dump())
 
     return app
 

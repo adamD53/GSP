@@ -9,7 +9,7 @@ from aiokafka import AIOKafkaConsumer
 from app.alerts import AlertStore
 from app.config import settings
 from app.kafka_client import LogBroker, _safe_stop_consumer
-from app.notifications import dispatch_notifications
+from app.notifications import dispatch_notifications, process_outbox_once
 from app.ollama_client import OllamaLogParser
 from app.parser import HybridLogParser, build_rule_eval_document
 from app.rules import evaluate_per_rule, load_rules
@@ -80,6 +80,13 @@ async def process_raw_message(
                             service=parsed.service,
                         )
                         alert_store.update_notifications(alert_rec.id, dispatched)
+                        if any(d.status == "failed" for d in dispatched):
+                            alert_store.enqueue_failed_notifications(
+                                alert_id=alert_rec.id,
+                                decisions=dispatched,
+                                log_summary=parsed.summary or parsed.message,
+                                service=parsed.service,
+                            )
                         all_decisions.extend(dispatched)
                     else:
                         suppressed = [
@@ -184,6 +191,7 @@ async def run_worker() -> None:
     await broker.start()
     await broker.ensure_topic(settings.parsed_topic)
     await broker.ensure_topic(settings.dead_letter_topic)
+    await broker.ensure_topic(settings.notification_dead_letter_topic)
 
     consumer = AIOKafkaConsumer(
         settings.default_topic,
@@ -201,6 +209,26 @@ async def run_worker() -> None:
             loop.add_signal_handler(sig, stop_event.set)
         except NotImplementedError:
             pass
+
+    async def _outbox_retry_loop() -> None:
+        while not stop_event.is_set():
+            try:
+                await process_outbox_once(
+                    alert_store=alert_store,
+                    broker=broker,
+                    dead_letter_topic=settings.notification_dead_letter_topic,
+                )
+            except Exception as exc:
+                logger.warning("Outbox retry pass failed: %s", exc)
+            try:
+                await asyncio.wait_for(
+                    stop_event.wait(),
+                    timeout=settings.notification_retry_poll_seconds,
+                )
+            except asyncio.TimeoutError:
+                pass
+
+    retry_task = asyncio.create_task(_outbox_retry_loop())
 
     logger.info(
         "Worker started: consuming '%s' -> HybridParser (fast=%s, schema_learn=%s, llm=%s, concurrency=%d) -> '%s'",
@@ -238,6 +266,12 @@ async def run_worker() -> None:
             )
             await consumer.commit()
     finally:
+        stop_event.set()
+        retry_task.cancel()
+        try:
+            await retry_task
+        except asyncio.CancelledError:
+            pass
         await _safe_stop_consumer(consumer)
         await broker.stop()
         await parser.close()
