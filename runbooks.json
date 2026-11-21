@@ -1,0 +1,29 @@
+[
+  {
+    "id": "rb-high-latency-yaml",
+    "name": "High-Latency & Timeout Remediation",
+    "format": "yaml",
+    "rule_ids": ["high-latency-error", "fatal-or-critical"],
+    "services": ["checkout-api", "order-settlement"],
+    "description": "Structured YAML runbook for upstream timeouts and high-latency errors.",
+    "content": "runbook: checkout-timeout\nmatches:\n  service: checkout-api\nsteps:\n  - check: \"Is {{service}} upstream gateway healthy?\"\n    action: http_get\n    url: \"http://{{service}}.internal/health\"\n    approval: none\n  - check: \"Retry failed order {{metadata.order_id}}\"\n    action: retry_workflow\n    workflowId: \"{{metadata.order_id}}\"\n    approval: none\n  - if: \"latency still above {{metadata.latency_ms}}ms after retry\"\n    check: \"Restart {{service}} pool and escalate to payments-oncall\"\n    action: escalate\n    team: counterparty-support\n    approval: required\n"
+  },
+  {
+    "id": "rb-auth-db-markdown",
+    "name": "Auth & Database Failure Playbook",
+    "format": "markdown",
+    "rule_ids": ["auth-or-db-failure"],
+    "services": ["db-migrator", "payments-api", "auth-02"],
+    "description": "Markdown playbook for DB connection timeouts and auth anomalies.",
+    "content": "# Incident Response: {{service}}\n\n1. Inspect active connections and error rate on {{service}} dashboard.\n2. Run a non-destructive health probe against {{service}} dependencies.\n3. Fail traffic over to secondary DB replica (needs approval from team lead).\n4. Post an incident update in #ops-incidents every 15 minutes until resolved.\n"
+  },
+  {
+    "id": "rb-inventory-text",
+    "name": "Inventory Sync Recovery Notes",
+    "format": "text",
+    "rule_ids": ["low-stock-warning"],
+    "services": ["inventory-sync"],
+    "description": "Free-text operational note copied from team wiki.",
+    "content": "When {{service}} reports low stock for SKU {{metadata.sku}} (remaining: {{metadata.remaining}}), verify the warehouse feed is not stalled. Restart the {{service}} worker if stale, wait 2 minutes, and escalate to ops-inventory if stock stays below threshold."
+  }
+]

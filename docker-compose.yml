@@ -58,8 +58,12 @@ services:
       PARSED_TOPIC: ${PARSED_TOPIC:-parsed-logs}
       DEAD_LETTER_TOPIC: ${DEAD_LETTER_TOPIC:-dead-letter-logs}
       RULES_FILE: /app/rules.json
+      RUNBOOKS_FILE: /app/runbooks.json
+      ALERTS_DB_PATH: /app/data/alerts.db
     volumes:
       - ./rules.json:/app/rules.json
+      - ./runbooks.json:/app/runbooks.json
+      - alerts_data:/app/data
     ports:
       - "${API_PORT:-8000}:8000"
     healthcheck:
@@ -85,9 +89,17 @@ services:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-60}
+      WORKER_BATCH_SIZE: ${WORKER_BATCH_SIZE:-100}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-16}
+      ENABLE_FAST_PARSER: ${ENABLE_FAST_PARSER:-true}
+      ENABLE_SCHEMA_LEARNING: ${ENABLE_SCHEMA_LEARNING:-true}
       RULES_FILE: /app/rules.json
+      RUNBOOKS_FILE: /app/runbooks.json
+      ALERTS_DB_PATH: /app/data/alerts.db
     volumes:
       - ./rules.json:/app/rules.json
+      - ./runbooks.json:/app/runbooks.json
+      - alerts_data:/app/data
 
   ui:
     build: ./frontend
@@ -101,3 +113,4 @@ services:
 
 volumes:
   ollama_data:
+  alerts_data:

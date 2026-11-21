@@ -7,6 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY rules.json ./rules.json
+COPY runbooks.json ./runbooks.json
 
 EXPOSE 8000
 

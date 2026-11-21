@@ -239,7 +239,7 @@ export function ServicesPanel({
                   <Separator className="my-3" />
                   <div className="space-y-1.5">
                     <p className="px-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                      Discovered from LLM Logs
+                      Discovered from Logs
                     </p>
                     {discoveredServices.map((disc) => {
                       const isSelected =
@@ -282,7 +282,7 @@ export function ServicesPanel({
                             onClick={() =>
                               onAddService({
                                 name: disc.displayName,
-                                description: "Auto-discovered from parsed logs",
+                                description: "Auto-discovered from incoming logs",
                                 topic: "raw-logs",
                                 format: "json",
                               })

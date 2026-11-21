@@ -160,6 +160,21 @@ def validate_rules(rules: Any) -> list[dict[str, Any]]:
             notify_items = raw_notify if isinstance(raw_notify, list) else [raw_notify]
             for item in notify_items:
                 normalize_notify_spec(item)
+        if "dedup_window_seconds" in rule and rule["dedup_window_seconds"] is not None:
+            win = rule["dedup_window_seconds"]
+            if not _is_number(win) or win < 0:
+                raise ValueError(
+                    f"Invalid 'dedup_window_seconds' at rule index {idx}; must be >= 0"
+                )
+        if "group_by" in rule and rule["group_by"] is not None:
+            gb = rule["group_by"]
+            if not isinstance(gb, list) or not all(
+                isinstance(p, str) and p.startswith("/") for p in gb
+            ):
+                raise ValueError(
+                    f"Invalid 'group_by' at rule index {idx}; "
+                    "must be a list of JSON Pointer paths (e.g. ['/service'])"
+                )
         validate_condition(_unwrap_condition(rule))
 
     return rule_list
@@ -264,6 +279,39 @@ def save_rules(
     cache_key = str(path.resolve())
     _RULES_CACHE[cache_key] = (path.stat().st_mtime, normalized)
     return normalized
+
+
+def evaluate_per_rule(
+    message: dict[str, Any],
+    rules: dict[str, Any] | list[dict[str, Any]],
+    at: datetime | None = None,
+    working_hours: WorkingHoursConfig | None = None,
+) -> list[tuple[RuleMatch, dict[str, Any], list[NotificationDecision]]]:
+    """Evaluate rules and return (RuleMatch, raw_rule_dict, decisions) per match."""
+    rule_list = [rules] if isinstance(rules, dict) else list(rules)
+    results: list[tuple[RuleMatch, dict[str, Any], list[NotificationDecision]]] = []
+
+    for idx, rule in enumerate(rule_list):
+        if rule.get("enabled", True) is False:
+            continue
+        cond = _unwrap_condition(rule)
+        if matches_condition(message, cond):
+            severity = rule.get("severity", "medium")
+            if severity not in _VALID_SEVERITIES:
+                severity = "medium"
+            match = RuleMatch(
+                id=str(rule.get("id") or f"rule-{idx + 1}"),
+                name=str(rule.get("name") or f"Rule {idx + 1}"),
+                severity=severity,  # type: ignore[arg-type]
+            )
+            decisions = resolve_notifications_for_rules(
+                [rule],
+                at=at,
+                working_hours=working_hours,
+            )
+            results.append((match, rule, decisions))
+
+    return results
 
 
 def evaluate_and_route(

@@ -5,7 +5,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "GSP Log Observatory",
   description:
-    "Next.js dashboard for Redpanda raw log ingestion and Ollama LLM-parsed structured logs.",
+    "Real-time log monitoring, alert routing, and incident management dashboard.",
 };
 
 export default function RootLayout({

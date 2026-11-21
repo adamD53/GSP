@@ -8,7 +8,7 @@ import {
   Mail,
   MessageSquare,
   ShieldAlert,
-  Sparkles,
+  ScrollText,
 } from "lucide-react";
 import { SeverityBadge } from "@/components/severity-badge";
 import { Badge } from "@/components/ui/badge";
@@ -65,10 +65,10 @@ export function LogDetailSheet({ log, onClose }: LogDetailSheetProps) {
                 )}
               </div>
               <SheetTitle className="mt-1 text-base leading-snug">
-                {log.summary || "LLM Parsed Log"}
+                {log.summary || "Log Entry"}
               </SheetTitle>
               <SheetDescription className="text-xs">
-                Structured output extracted by the Ollama worker
+                Structured log details and routing status
               </SheetDescription>
             </SheetHeader>
 
@@ -82,8 +82,8 @@ export function LogDetailSheet({ log, onClose }: LogDetailSheetProps) {
                 <TabsContent value="structured" className="mt-4 space-y-4">
                   <div className="rounded-lg border border-sky-500/25 bg-sky-500/5 p-3">
                     <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-sky-700 dark:text-sky-300">
-                      <Sparkles className="size-3.5" />
-                      LLM Summary
+                      <ScrollText className="size-3.5" />
+                      Summary
                     </div>
                     <p className="text-sm leading-relaxed text-foreground">
                       {log.summary || "—"}
@@ -94,7 +94,7 @@ export function LogDetailSheet({ log, onClose }: LogDetailSheetProps) {
                     <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3">
                       <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-rose-700 dark:text-rose-300">
                         <ShieldAlert className="size-3.5" />
-                        Triggered Rulebook Alerts ({log.matched_rules.length})
+                        Matched Routing Rules ({log.matched_rules.length})
                       </div>
                       <div className="flex flex-wrap gap-1.5">
                         {log.matched_rules.map((rule) => (

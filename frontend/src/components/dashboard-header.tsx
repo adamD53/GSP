@@ -106,7 +106,7 @@ export function DashboardHeader({
               </Tooltip>
             </div>
             <p className="text-xs text-muted-foreground">
-              Redpanda raw ingestion &amp; Ollama LLM structured log stream
+              Real-time log stream, alert routing &amp; incident management
             </p>
           </div>
         </div>

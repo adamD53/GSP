@@ -4,7 +4,7 @@ import {
   AlertTriangle,
   Boxes,
   FileWarning,
-  Sparkles,
+  ScrollText,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -33,9 +33,9 @@ export function MetricsRow({
       <Card size="sm">
         <CardHeader className="flex flex-row items-center justify-between pb-1">
           <CardTitle className="text-xs font-medium text-muted-foreground">
-            LLM Parsed Logs
+            Logs
           </CardTitle>
-          <Sparkles className="size-4 text-sky-500" />
+          <ScrollText className="size-4 text-muted-foreground" />
         </CardHeader>
         <CardContent>
           <div className="text-2xl font-bold tracking-tight tabular-nums">
@@ -108,7 +108,7 @@ export function MetricsRow({
             {deadLetterCount}
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {deadLetterCount > 0 ? "Needs parser review" : "All logs parsed cleanly"}
+            {deadLetterCount > 0 ? "Needs review" : "No failed events"}
           </p>
         </CardContent>
       </Card>

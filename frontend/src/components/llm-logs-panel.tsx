@@ -3,18 +3,24 @@
 import { useMemo, useState } from "react";
 import {
   AlertOctagon,
+  BellRing,
+  BookOpen,
   Clock,
   FileText,
   Mail,
+  Maximize2,
   MessageSquare,
+  Minimize2,
   Search,
   ShieldAlert,
-  Sparkles,
+  ScrollText,
   Trash2,
   X,
 } from "lucide-react";
+import { AlertsPanel } from "@/components/alerts-panel";
 import { LogDetailSheet } from "@/components/log-detail-sheet";
 import { RulebookPanel } from "@/components/rulebook-panel";
+import { RunbooksPanel } from "@/components/runbooks-panel";
 import { SeverityBadge } from "@/components/severity-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,7 +33,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -46,6 +51,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   LOG_LEVELS,
+  type AlertRecord,
   type DeadLetterLog,
   type LogLevel,
   type ParsedLogEntry,
@@ -53,11 +59,25 @@ import {
 
 interface LLMLogsPanelProps {
   logs: ParsedLogEntry[];
+  alerts: AlertRecord[];
   deadLetters: DeadLetterLog[];
   rawLogs: string;
   selectedService: string | null;
+  expanded: boolean;
+  onToggleExpand: () => void;
   onClearServiceFilter: () => void;
   onClearLogs: () => void;
+  onTransitionAlert: (
+    alertId: string,
+    action: "ack" | "resolve" | "reopen",
+    actor: string
+  ) => Promise<void>;
+  onExecuteAlertStep: (
+    alertId: string,
+    stepIndex: number,
+    actor: string,
+    approved: boolean
+  ) => Promise<void>;
 }
 
 function formatShortTime(ts: string | null): string {
@@ -76,12 +96,21 @@ function formatShortTime(ts: string | null): string {
 
 export function LLMLogsPanel({
   logs,
+  alerts,
   deadLetters,
   rawLogs,
   selectedService,
+  expanded,
+  onToggleExpand,
   onClearServiceFilter,
   onClearLogs,
+  onTransitionAlert,
+  onExecuteAlertStep,
 }: LLMLogsPanelProps) {
+  const openAlertsCount = useMemo(
+    () => alerts.filter((a) => a.status === "open").length,
+    [alerts]
+  );
   const [search, setSearch] = useState("");
   const [levelFilter, setLevelFilter] = useState<LogLevel | "ALL">("ALL");
   const [alertsOnly, setAlertsOnly] = useState(false);
@@ -135,13 +164,31 @@ export function LLMLogsPanel({
       <Card className="flex h-full flex-col">
         <CardHeader className="border-b pb-3">
           <div className="flex items-center gap-2">
-            <Sparkles className="size-4 text-sky-500" />
-            <CardTitle>LLM Output Log</CardTitle>
+            <ScrollText className="size-4 text-muted-foreground" />
+            <CardTitle>Logs</CardTitle>
           </div>
           <CardDescription>
-            Ollama-parsed structured summaries, severity, and extracted metadata
+            Live structured logs, alerts, and routing rules
           </CardDescription>
-          <CardAction>
+          <CardAction className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onToggleExpand}
+              className="gap-1.5 text-xs text-muted-foreground"
+            >
+              {expanded ? (
+                <>
+                  <Minimize2 className="size-3.5" />
+                  Split View
+                </>
+              ) : (
+                <>
+                  <Maximize2 className="size-3.5" />
+                  Expand
+                </>
+              )}
+            </Button>
             <Button
               variant="ghost"
               size="sm"
@@ -155,15 +202,25 @@ export function LLMLogsPanel({
           </CardAction>
         </CardHeader>
 
-        <CardContent className="flex flex-1 flex-col gap-3 pt-3 overflow-hidden">
-          <Tabs defaultValue="parsed" className="flex flex-1 flex-col overflow-hidden">
+        <CardContent className="flex flex-1 flex-col gap-3 pt-3">
+          <Tabs defaultValue="parsed" className="flex flex-1 flex-col">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <TabsList>
                 <TabsTrigger value="parsed" className="gap-1.5">
-                  <Sparkles className="size-3.5" />
-                  LLM Parsed
+                  <ScrollText className="size-3.5" />
+                  Logs
                   <Badge variant="secondary" className="ml-0.5 font-mono text-[10px]">
                     {filteredLogs.length}
+                  </Badge>
+                </TabsTrigger>
+                <TabsTrigger value="alerts" className="gap-1.5">
+                  <BellRing className="size-3.5" />
+                  Alerts
+                  <Badge
+                    variant={openAlertsCount > 0 ? "destructive" : "secondary"}
+                    className="ml-0.5 font-mono text-[10px]"
+                  >
+                    {openAlertsCount}
                   </Badge>
                 </TabsTrigger>
                 <TabsTrigger value="dlq" className="gap-1.5">
@@ -182,7 +239,11 @@ export function LLMLogsPanel({
                 </TabsTrigger>
                 <TabsTrigger value="rules" className="gap-1.5">
                   <ShieldAlert className="size-3.5" />
-                  Rulebook
+                  Alert Routing
+                </TabsTrigger>
+                <TabsTrigger value="runbooks" className="gap-1.5">
+                  <BookOpen className="size-3.5" />
+                  Runbooks
                 </TabsTrigger>
               </TabsList>
 
@@ -206,7 +267,7 @@ export function LLMLogsPanel({
 
             <TabsContent
               value="parsed"
-              className="mt-3 flex flex-1 flex-col gap-3 overflow-hidden"
+              className="mt-3 flex flex-1 flex-col gap-3"
             >
               <div className="flex flex-wrap items-center gap-2">
                 <div className="relative flex-1 min-w-[200px]">
@@ -214,7 +275,7 @@ export function LLMLogsPanel({
                   <Input
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search LLM summary, message, service, metadata..."
+                    placeholder="Search summary, message, service, metadata..."
                     className="pl-8 text-xs"
                   />
                 </div>
@@ -256,18 +317,18 @@ export function LLMLogsPanel({
                 </Button>
               </div>
 
-              <div className="flex-1 overflow-hidden rounded-lg border">
-                <ScrollArea className="h-[520px]">
+              <div className="flex-1 rounded-lg border">
+                <div className="min-h-[420px] overflow-x-auto">
                   {filteredLogs.length === 0 ? (
-                    <div className="flex h-[440px] flex-col items-center justify-center p-6 text-center">
-                      <Sparkles className="mb-2 size-7 text-muted-foreground/50" />
+                    <div className="flex min-h-[360px] flex-col items-center justify-center p-6 text-center">
+                      <ScrollText className="mb-2 size-7 text-muted-foreground/50" />
                       <p className="text-sm font-medium text-foreground">
-                        No LLM-parsed logs to display
+                        No logs to display
                       </p>
                       <p className="mt-1 max-w-sm text-xs text-muted-foreground">
                         {logs.length > 0
                           ? "Try clearing your search query, severity filter, or service filter."
-                          : "Send a test log from the Services panel or run scripts/simulate_http_logs.py to see Ollama parse incoming logs live."}
+                          : "Send a test log from the Services panel or run scripts/simulate_http_logs.py to see incoming logs live."}
                       </p>
                     </div>
                   ) : (
@@ -277,7 +338,7 @@ export function LLMLogsPanel({
                           <TableHead className="w-[86px]">Time</TableHead>
                           <TableHead className="w-[92px]">Level</TableHead>
                           <TableHead className="w-[140px]">Service</TableHead>
-                          <TableHead>LLM Summary &amp; Message</TableHead>
+                          <TableHead>Summary &amp; Message</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -381,21 +442,21 @@ export function LLMLogsPanel({
                       </TableBody>
                     </Table>
                   )}
-                </ScrollArea>
+                </div>
               </div>
             </TabsContent>
 
-            <TabsContent value="dlq" className="mt-3 flex-1 overflow-hidden">
-              <div className="overflow-hidden rounded-lg border">
-                <ScrollArea className="h-[564px]">
+            <TabsContent value="dlq" className="mt-3 flex-1">
+              <div className="rounded-lg border">
+                <div className="min-h-[420px] overflow-x-auto">
                   {deadLetters.length === 0 ? (
-                    <div className="flex h-[460px] flex-col items-center justify-center p-6 text-center">
+                    <div className="flex min-h-[360px] flex-col items-center justify-center p-6 text-center">
                       <AlertOctagon className="mb-2 size-7 text-muted-foreground/50" />
                       <p className="text-sm font-medium">
                         Dead-letter queue is empty
                       </p>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        Logs that fail Ollama parsing or schema validation appear
+                        Logs that fail ingestion or schema validation appear
                         here with their error reason.
                       </p>
                     </div>
@@ -431,12 +492,12 @@ export function LLMLogsPanel({
                       </TableBody>
                     </Table>
                   )}
-                </ScrollArea>
+                </div>
               </div>
             </TabsContent>
 
-            <TabsContent value="raw" className="mt-3 flex-1 overflow-hidden">
-              <ScrollArea className="h-[564px] rounded-lg border bg-zinc-950 p-4 text-zinc-100">
+            <TabsContent value="raw" className="mt-3 flex-1">
+              <div className="min-h-[420px] overflow-x-auto rounded-lg border bg-zinc-950 p-4 text-zinc-100">
                 {rawLogs.trim() ? (
                   <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap break-all">
                     {rawLogs}
@@ -446,11 +507,24 @@ export function LLMLogsPanel({
                     No raw logs available in topic.
                   </p>
                 )}
-              </ScrollArea>
+              </div>
             </TabsContent>
 
-            <TabsContent value="rules" className="mt-3 flex-1 overflow-hidden">
+            <TabsContent value="alerts" className="mt-3 flex-1">
+              <AlertsPanel
+                alerts={alerts}
+                selectedService={selectedService}
+                onTransition={onTransitionAlert}
+                onExecuteStep={onExecuteAlertStep}
+              />
+            </TabsContent>
+
+            <TabsContent value="rules" className="mt-3 flex-1">
               <RulebookPanel />
+            </TabsContent>
+
+            <TabsContent value="runbooks" className="mt-3 flex-1">
+              <RunbooksPanel />
             </TabsContent>
           </Tabs>
         </CardContent>

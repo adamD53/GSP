@@ -9,6 +9,7 @@ import { LLMLogsPanel } from "@/components/llm-logs-panel";
 import { MetricsRow } from "@/components/metrics-row";
 import { ServicesPanel } from "@/components/services-panel";
 import type {
+  AlertRecord,
   DeadLetterLog,
   LogLevel,
   ParsedLog,
@@ -80,6 +81,7 @@ export function LogDashboard() {
   const [servicesLoaded, setServicesLoaded] = useState(false);
 
   const [logs, setLogs] = useState<ParsedLogEntry[]>([]);
+  const [alerts, setAlerts] = useState<AlertRecord[]>([]);
   const [deadLetters, setDeadLetters] = useState<DeadLetterLog[]>([]);
   const [rawLogs, setRawLogs] = useState("");
   const [selectedService, setSelectedService] = useState<string | null>(null);
@@ -90,6 +92,7 @@ export function LogDashboard() {
   const [streamConnected, setStreamConnected] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [darkMode, setDarkMode] = useState(true);
+  const [mainExpanded, setMainExpanded] = useState(false);
 
   const streamSeqRef = useRef(0);
 
@@ -162,15 +165,77 @@ export function LogDashboard() {
     }
   }, []);
 
+  const fetchAlerts = useCallback(async () => {
+    try {
+      const res = await fetch("/api/alerts?limit=200", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) setAlerts(data);
+      }
+    } catch {
+      // ignore transient errors
+    }
+  }, []);
+
+  const handleTransitionAlert = useCallback(
+    async (
+      alertId: string,
+      action: "ack" | "resolve" | "reopen",
+      actor: string
+    ) => {
+      const res = await fetch(
+        `/api/alerts/${encodeURIComponent(alertId)}/${action}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ actor }),
+        }
+      );
+      if (res.ok) {
+        const updated = (await res.json()) as AlertRecord;
+        setAlerts((prev) =>
+          prev.map((a) => (a.id === updated.id ? updated : a))
+        );
+      }
+    },
+    []
+  );
+
+  const handleExecuteAlertStep = useCallback(
+    async (
+      alertId: string,
+      stepIndex: number,
+      actor: string,
+      approved: boolean
+    ) => {
+      const res = await fetch(
+        `/api/alerts/${encodeURIComponent(alertId)}/steps/${stepIndex}/execute`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ actor, approved }),
+        }
+      );
+      if (res.ok) {
+        const updated = (await res.json()) as AlertRecord;
+        setAlerts((prev) =>
+          prev.map((a) => (a.id === updated.id ? updated : a))
+        );
+      }
+    },
+    []
+  );
+
   const fetchSnapshot = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      const [parsedRes, dlqRes, rawRes] = await Promise.allSettled([
+      const [parsedRes, dlqRes, rawRes, alertsRes] = await Promise.allSettled([
         fetch("/api/logs/parsed?limit=200&from_beginning=true", {
           cache: "no-store",
         }),
         fetch("/api/logs/dead-letter?limit=100", { cache: "no-store" }),
         fetch("/api/logs?limit=200&from_beginning=true", { cache: "no-store" }),
+        fetch("/api/alerts?limit=200", { cache: "no-store" }),
       ]);
 
       if (parsedRes.status === "fulfilled" && parsedRes.value.ok) {
@@ -193,6 +258,13 @@ export function LogDashboard() {
       if (rawRes.status === "fulfilled" && rawRes.value.ok) {
         const text = await rawRes.value.text();
         setRawLogs(text);
+      }
+
+      if (alertsRes.status === "fulfilled" && alertsRes.value.ok) {
+        const data = await alertsRes.value.json();
+        if (Array.isArray(data)) {
+          setAlerts(data);
+        }
       }
     } finally {
       setIsRefreshing(false);
@@ -267,6 +339,9 @@ export function LogDashboard() {
             setLogs((prev) =>
               [...incoming.reverse(), ...prev].slice(0, MAX_LOGS_IN_MEMORY)
             );
+            if (incoming.some((item) => item.alert)) {
+              void fetchAlerts();
+            }
           }
         }
       } catch (err) {
@@ -286,7 +361,7 @@ export function LogDashboard() {
       controller.abort();
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
     };
-  }, [isStreaming]);
+  }, [isStreaming, fetchAlerts]);
 
   function handleAddService(
     input: Omit<RegisteredService, "id" | "createdAt">
@@ -348,30 +423,43 @@ export function LogDashboard() {
         />
 
         <div className="grid flex-1 grid-cols-1 gap-4 lg:grid-cols-12">
-          <section className="lg:col-span-4 xl:col-span-3">
-            <ServicesPanel
-              services={services}
-              logs={logs}
-              selectedService={selectedService}
-              onSelectService={setSelectedService}
-              onAddService={handleAddService}
-              onDeleteService={handleDeleteService}
-              onLogSent={() => {
-                window.setTimeout(() => {
-                  void fetchSnapshot();
-                }, 1500);
-              }}
-            />
-          </section>
+          {!mainExpanded && (
+            <section className="lg:col-span-4 xl:col-span-3">
+              <ServicesPanel
+                services={services}
+                logs={logs}
+                selectedService={selectedService}
+                onSelectService={setSelectedService}
+                onAddService={handleAddService}
+                onDeleteService={handleDeleteService}
+                onLogSent={() => {
+                  window.setTimeout(() => {
+                    void fetchSnapshot();
+                  }, 1500);
+                }}
+              />
+            </section>
+          )}
 
-          <section className="lg:col-span-8 xl:col-span-9">
+          <section
+            className={
+              mainExpanded
+                ? "lg:col-span-12"
+                : "lg:col-span-8 xl:col-span-9"
+            }
+          >
             <LLMLogsPanel
               logs={logs}
+              alerts={alerts}
               deadLetters={deadLetters}
               rawLogs={rawLogs}
               selectedService={selectedService}
+              expanded={mainExpanded}
+              onToggleExpand={() => setMainExpanded((prev) => !prev)}
               onClearServiceFilter={() => setSelectedService(null)}
               onClearLogs={() => setLogs([])}
+              onTransitionAlert={handleTransitionAlert}
+              onExecuteAlertStep={handleExecuteAlertStep}
             />
           </section>
         </div>

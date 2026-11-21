@@ -107,7 +107,7 @@ export function ServiceIngestDialog({
       } else {
         setFeedback({
           kind: "success",
-          text: `Ingested into "${service.topic}". Ollama worker will parse it shortly.`,
+          text: `Ingested into "${service.topic}". Log will appear in the stream shortly.`,
         });
         onLogSent();
       }

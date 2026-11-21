@@ -16,7 +16,6 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -299,12 +298,12 @@ export function RulebookPanel() {
   }
 
   return (
-    <div className="grid h-[564px] grid-cols-1 gap-3 xl:grid-cols-12">
-      <div className="flex flex-col overflow-hidden rounded-lg border xl:col-span-7">
+    <div className="grid min-h-[540px] grid-cols-1 gap-3 xl:grid-cols-12">
+      <div className="flex flex-col rounded-lg border xl:col-span-7">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/40 px-3 py-2">
           <div className="flex items-center gap-2">
             <ShieldAlert className="size-4 text-amber-500" />
-            <span className="text-xs font-semibold">Rulebook (rules.json)</span>
+            <span className="text-xs font-semibold">Alert Routing Rules</span>
             <Badge variant="secondary" className="font-mono text-[10px]">
               {rules.length}
             </Badge>
@@ -358,11 +357,11 @@ export function RulebookPanel() {
         )}
 
         {editMode ? (
-          <div className="flex flex-1 flex-col gap-2 overflow-hidden p-3">
+          <div className="flex flex-1 flex-col gap-2 p-3">
             <Textarea
               value={jsonText}
               onChange={(e) => setJsonText(e.target.value)}
-              className="flex-1 resize-none font-mono text-xs leading-relaxed"
+              className="min-h-[420px] flex-1 resize-y font-mono text-xs leading-relaxed"
               spellCheck={false}
             />
             <div className="flex items-center justify-between gap-2">
@@ -377,12 +376,12 @@ export function RulebookPanel() {
                 className="shrink-0 gap-1.5"
               >
                 <Save className="size-3.5" />
-                {saving ? "Saving..." : "Save Rulebook"}
+                {saving ? "Saving..." : "Save Routing"}
               </Button>
             </div>
           </div>
         ) : (
-          <ScrollArea className="flex-1 p-3">
+          <div className="flex-1 p-3">
             <div className="space-y-2">
               {rules.length === 0 ? (
                 <div className="rounded-lg border border-dashed p-6 text-center text-xs text-muted-foreground">
@@ -482,11 +481,11 @@ export function RulebookPanel() {
                 })
               )}
             </div>
-          </ScrollArea>
+          </div>
         )}
       </div>
 
-      <div className="flex flex-col overflow-hidden rounded-lg border xl:col-span-5">
+      <div className="flex flex-col rounded-lg border xl:col-span-5">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/40 px-3 py-2">
           <span className="text-xs font-semibold">Live Routing Tester</span>
           <div className="flex items-center gap-1.5">
@@ -519,17 +518,17 @@ export function RulebookPanel() {
           </div>
         </div>
 
-        <div className="flex flex-1 flex-col gap-2.5 overflow-hidden p-3">
+        <div className="flex flex-1 flex-col gap-2.5 p-3">
           <Textarea
             value={testPayload}
             onChange={(e) => setTestPayload(e.target.value)}
-            className="flex-1 resize-none font-mono text-xs leading-relaxed"
+            className="min-h-[240px] flex-1 resize-y font-mono text-xs leading-relaxed"
             spellCheck={false}
           />
 
           <Separator />
 
-          <ScrollArea className="max-h-[175px] rounded-lg border bg-muted/30 p-2.5 text-xs">
+          <div className="min-h-[120px] rounded-lg border bg-muted/30 p-2.5 text-xs">
             {testError ? (
               <p className="font-mono text-rose-600 dark:text-rose-400">
                 {testError}
@@ -607,7 +606,7 @@ export function RulebookPanel() {
                 to preview email &amp; SMS routing decisions.
               </p>
             )}
-          </ScrollArea>
+          </div>
         </div>
       </div>
     </div>
