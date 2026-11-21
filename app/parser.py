@@ -334,6 +334,20 @@ def build_rule_eval_document(parsed: ParsedLog) -> dict[str, Any]:
     return canonical
 
 
+def prepare_rule_eval_target(message: dict[str, Any]) -> dict[str, Any]:
+    """Normalize an arbitrary dict or ParsedLog dict for rule evaluation.
+
+    - If `message` already contains an `event` dict (a ParsedLog), expose its
+      top-level fields alongside canonical fields (matching worker behavior).
+    - If `message` is a raw event dict without `event`, also expose it under
+      `/event/...` so rules targeting `/event/<path>` work in `/rules/evaluate`.
+    """
+    raw_event = message.get("event")
+    if isinstance(raw_event, dict):
+        return {**raw_event, **message}
+    return {**message, "event": message}
+
+
 class HybridLogParser:
     """Fast-path structured parser with schema-mapping cache and Ollama LLM fallback."""
 

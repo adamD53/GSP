@@ -10,6 +10,7 @@ from app.alerts import AlertStore
 from app.config import settings
 from app.kafka_client import LogBroker
 from app.notifications import get_default_working_hours, is_within_working_hours
+from app.parser import prepare_rule_eval_target
 from app.rules import (
     evaluate_and_route,
     load_rules,
@@ -217,7 +218,8 @@ def create_app(
                 if override_rules is not None
                 else load_rules(active_rules_file)
             )
-            matches, decisions = evaluate_and_route(message, rules, at=eval_time)
+            eval_target = prepare_rule_eval_target(message)
+            matches, decisions = evaluate_and_route(eval_target, rules, at=eval_time)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

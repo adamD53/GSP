@@ -4,8 +4,13 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+import httpx
+from fastapi.testclient import TestClient
+
 from app.alerts import AlertStore
-from app.parser import HybridLogParser, build_rule_eval_document
+from app.main import create_app
+from app.ollama_client import OllamaLogParser
+from app.parser import HybridLogParser, build_rule_eval_document, prepare_rule_eval_target
 from app.schemas import ParsedLog, SchemaFieldMapping
 from app.worker import process_batch, process_raw_message
 
@@ -297,3 +302,111 @@ def test_build_rule_eval_document_exposes_both_canonical_and_event_paths() -> No
     assert doc["metadata"]["workflowId"] == "WF-1"
     assert doc["error"]["code"] == "TIMEOUT"
     assert doc["event"]["error"]["code"] == "TIMEOUT"
+
+
+def test_ollama_parser_preserves_original_json_event_types(tmp_path: Path) -> None:
+    raw_event = json.dumps(
+        {
+            "meta": {"schema": "trade.rejected.v2"},
+            "payload": {"notional": 25000000, "currency": "EUR"},
+        }
+    )
+    # Simulate an LLM that retypes notional to string and drops nested payload.
+    llm_json = json.dumps(
+        {
+            "timestamp": None,
+            "level": "WARN",
+            "service": "trade-gateway",
+            "message": "trade rejected",
+            "summary": "Trade rejected.",
+            "metadata": {"notional": "25000000"},
+        }
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"message": {"content": llm_json}})
+
+    rules_path = tmp_path / "rules.json"
+    rules_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "rates-notional",
+                    "name": "Rates Notional",
+                    "severity": "high",
+                    "enabled": True,
+                    "field": "/event/payload/notional",
+                    "operator": "gt",
+                    "value": 10000000,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    async def _run() -> tuple[ParsedLog, FakeProducer]:
+        producer = FakeProducer()
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            parser = OllamaLogParser("http://ollama:11434", "qwen2.5:1.5b", client=client)
+            parsed = await parser.parse(raw_event)
+            await process_raw_message(
+                raw_text=raw_event,
+                parser=parser,
+                broker=producer,
+                parsed_topic="parsed-logs",
+                dead_letter_topic="dead-letter-logs",
+                rules_file=str(rules_path),
+            )
+            return parsed, producer
+
+    parsed, producer = asyncio.run(_run())
+    assert parsed.event is not None
+    assert parsed.event["payload"]["notional"] == 25000000
+    saved = json.loads(producer.sent["parsed-logs"][0].decode("utf-8"))
+    assert saved["alert"] is True
+    assert saved["matched_rules"][0]["id"] == "rates-notional"
+
+
+def test_rules_evaluate_api_supports_event_and_raw_paths(tmp_path: Path) -> None:
+    class _DummyBroker:
+        async def start(self) -> None: ...
+        async def stop(self) -> None: ...
+
+    rules_path = tmp_path / "rules.json"
+    rules_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "event-path-rule",
+                    "name": "Event Path Rule",
+                    "severity": "high",
+                    "enabled": True,
+                    "field": "/event/payload/notional",
+                    "operator": "gt",
+                    "value": 10000000,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    app = create_app(
+        broker=_DummyBroker(),  # type: ignore[arg-type]
+        rules_file=str(rules_path),
+        alert_store=AlertStore(tmp_path / "alerts.db"),
+    )
+    with TestClient(app) as client:
+        # Raw event without wrapper still matches /event/payload/notional
+        resp = client.post(
+            "/rules/evaluate",
+            json={"message": {"payload": {"notional": 25000000}}},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["matched"] is True
+
+        # ParsedLog dict with `event` matches top-level /payload/notional too
+        target = prepare_rule_eval_target(
+            {"level": "WARN", "event": {"payload": {"notional": 25000000}}}
+        )
+        assert target["payload"]["notional"] == 25000000
+        assert target["event"]["payload"]["notional"] == 25000000

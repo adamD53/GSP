@@ -54,7 +54,21 @@ class OllamaLogParser:
         body = response.json()
         content = body["message"]["content"]
         extracted = LLMExtractedLog.model_validate_json(content)
-        return ParsedLog(**extracted.model_dump(), raw=raw_log, parse_mode="llm")
+        raw_event: dict[str, Any] | None = None
+        stripped = raw_log.strip()
+        if stripped.startswith("{") and stripped.endswith("}"):
+            try:
+                loaded = json.loads(stripped)
+                if isinstance(loaded, dict):
+                    raw_event = loaded
+            except json.JSONDecodeError:
+                raw_event = None
+        return ParsedLog(
+            **extracted.model_dump(),
+            raw=raw_log,
+            event=raw_event,
+            parse_mode="llm",
+        )
 
     async def infer_schema_mapping(self, sample_doc: dict[str, Any]) -> SchemaFieldMapping:
         payload = {
